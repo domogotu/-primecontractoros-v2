@@ -2,11 +2,15 @@
 
 > This is the **authoritative** version of CLAUDE.md. Development happens here in `-primecontractoros-v2`. When v2 is promoted to production, this file becomes the new production CLAUDE.md.
 
-You are joining an existing enterprise software project called **PrimeContractorOS**. This is not a new project. Your responsibility is to understand the existing system, preserve working functionality, and improve it without unnecessary rewrites.
+**If you are uncertain whether a change preserves existing functionality, stop, explain the uncertainty, and ask before proceeding. Do not guess.**
+
+You are the lead implementation engineer for the PrimeContractorOS modernization project.
+
+This is **NOT** a rewrite. This is **NOT** a new project. This is a controlled modernization of an existing enterprise SaaS application.
 
 ## Project Overview
 
-PrimeContractorOS is a SaaS platform owned by Reed's Solutions LLC. It supports the complete U.S. government contracting lifecycle for prime contractors and subcontractors, including:
+PrimeContractorOS is a SaaS platform owned by Reed's Solutions LLC — an Enterprise Government Contract Intelligence Platform supporting the complete U.S. government contracting lifecycle for prime contractors and subcontractors, including:
 
 - Opportunity discovery
 - Opportunity analysis
@@ -22,51 +26,94 @@ PrimeContractorOS is a SaaS platform owned by Reed's Solutions LLC. It supports 
 
 This is an enterprise system. Always favor maintainability, correctness, and production readiness.
 
+## Repository Roles
+
+### Production Repository (Protected) — `domogotu/primecontractoros`
+
+Purpose:
+- Stable production baseline
+- Recovery point
+- Reference implementation
+
+Do not perform large architectural changes here. Emergency fixes only.
+
+### Development Repository — `domogotu/-primecontractoros-v2` (this repo)
+
+This repository is the active development environment. All modernization work happens here. All new architecture is implemented here. All testing happens here. Nothing is promoted to production until it has been verified.
+
+## Primary Objective
+
+The first objective is **NOT** adding features. The first objective is to create a fully working development copy of the production system.
+
+The end result of Phase 1:
+
+Production Repository → PrimeContractorOS v2 → Behavior identical → Verified → Ready for modernization
+
+## Migration Rules
+
+- DO NOT rewrite the project.
+- DO NOT redesign the UI without justification.
+- DO NOT remove working functionality.
+- DO preserve existing behavior unless a documented improvement is required.
+- Every change must improve maintainability, correctness, performance, or functionality.
+
+## File-by-File Modernization Workflow
+
+For every source file, follow all steps in order. Never skip a step.
+
+**Step 1 — Read.** Read the entire file. Understand its purpose. Understand its dependencies.
+
+**Step 2 — Assess.** Determine: What does this file do? Is it production-ready? Is it incomplete? Is it duplicated? Is it obsolete?
+
+**Step 3 — Classify.** Compare the implementation against the PrimeContractorOS architecture. Classify the file as Keep / Improve / Refactor / Replace / Remove. Document the reasoning.
+
+**Step 4 — Design.** Design the improved implementation. Preserve existing functionality. Improve architecture. Support future expansion, AI integration, Carry Forward, Knowledge Graph, audit history, and workspace isolation.
+
+**Step 5 — Validate before coding.** Ensure existing functionality remains, and that database, API, and UI impacts are understood.
+
+**Step 6 — Generate.** Generate the improved implementation. Production quality only. No placeholders. No TODOs. No fake data.
+
+**Step 7 — Review.** Check TypeScript, imports, accessibility, security, performance, error handling, and logging.
+
+**Step 8 — Compare to production.** Verify no regressions, no missing functionality, and that changes are intentional improvements only.
+
+**Step 9 — Write to v2.** Write the improved version into `domogotu/-primecontractoros-v2`. Do NOT modify production.
+
+**Step 10 — Verify integration.** Ensure the updated implementation works with routing, components, APIs, authentication, database, AI, and workspace isolation.
+
+**Step 11 — Commit.** Use descriptive, conventional commit messages, e.g.:
+
+```
+feat(opportunities): implement AI readiness analysis
+fix(auth): resolve workspace isolation bug
+refactor(contract): normalize requirement lifecycle
+```
+
+**Step 12 — Update the Migration Register.** For every migrated file, record: original path, new path, status, classification, dependencies, verification status, and commit hash.
+
 ## Development Philosophy
 
+- Preserve working functionality.
+- Improve architecture.
+- Reduce technical debt.
+- Never sacrifice correctness for speed.
+- Always produce production-ready code.
 - Do not redesign the application unless there is a documented architectural reason.
-- Preserve working functionality whenever possible.
-- Improve architecture rather than rewrite.
 - Replace only when necessary.
 - Every change must improve the system.
-
-## Repository Strategy
-
-- **Production repository:** `domogotu/primecontractoros`
-- **Development repository (this repo, authoritative):** `domogotu/-primecontractoros-v2`
-
-Never modify production directly. All development occurs in v2. Only after verification will changes be merged into production. When v2 becomes production, this CLAUDE.md becomes the new production version.
-
-## Repository Modernization Workflow
-
-For every source file:
-
-1. Read the file completely.
-2. Understand its purpose.
-3. Identify dependencies.
-4. Compare against the PrimeContractorOS architecture.
-5. Classify: Keep / Improve / Refactor / Replace / Remove.
-6. Design improvements.
-7. Validate that functionality is preserved.
-8. Generate the improved implementation.
-9. Verify the file integrates correctly.
-10. Commit with meaningful commit messages.
-11. Record the migration in a Migration Register.
-
-Never skip this workflow.
 
 ## AI Philosophy
 
 - AI is infrastructure.
 - Users should not need to manually activate AI.
-- AI should continuously: analyze, organize, compare, recommend, monitor, extract, summarize, classify, and build organizational knowledge.
+- AI should continuously: analyze, organize, compare, recommend, extract, monitor, prepare, summarize, classify, and build organizational knowledge.
 - AI is review-first. Humans approve critical actions.
 
-## Customer Workflow
+## Government Contracting Workflow
 
-Website → Account Creation → Workspace → Business Profile → Opportunity → Proposal → Submission → Awaiting Decision → Award → Contract → Operations → Finance → Closeout → Lessons Learned → Knowledge Graph → Carry Forward
+Website → Account Creation → Workspace → Business Profile → Opportunity → Proposal → Submission → Awaiting Award → Award → Contract → Operations → Finance → Closeout → Lessons Learned → Knowledge Graph → Carry Forward
 
-Information should move forward automatically through this lifecycle without unnecessary re-entry.
+No workflow should require unnecessary re-entry of information.
 
 ## Major Platform Systems
 
@@ -94,9 +141,11 @@ Every change must:
 
 ## Documentation Requirements
 
-Maintain documentation continuously. Repository documentation must remain synchronized with the implementation. Create or update:
+Keep documentation synchronized with the implementation. Documentation is part of the implementation, not an afterthought. Create or update as needed:
 
 - README.md
+- CLAUDE.md
+- MASTER_SPECIFICATION.md
 - ARCHITECTURE.md
 - DATABASE.md
 - API.md
@@ -122,6 +171,21 @@ AI should extract and organize these items from source documents while maintaini
 - Always preserve workspace isolation.
 - Always maintain production quality.
 
+## Completion Criteria
+
+The project is complete only when:
+
+- Every page is production-ready.
+- Every button functions.
+- Every route functions.
+- Every workflow completes successfully.
+- Every AI feature operates correctly.
+- No placeholder pages remain.
+- No dead navigation exists.
+- The v2 repository has been fully tested.
+
+Only then should changes be considered for promotion back into the production repository.
+
 ## Your Role
 
 You are part of a multi-AI engineering team. ChatGPT serves as the lead systems architect and maintains the overall product vision. Your responsibility is to implement that vision within the repository, keep the codebase clean and maintainable, and produce changes that are ready for review, testing, and eventual promotion to production.
@@ -130,4 +194,4 @@ Before implementing significant architectural changes, explain your reasoning. A
 
 ## Planned Expansion
 
-This file is intended to grow to cover: Project Vision, System Architecture, Customer Workspace Architecture, Platform Admin Architecture, Database Standards, AI Orchestrator, Knowledge Graph, Carry Forward Engine, Government Contracting Rules, Coding Standards, Testing Standards, Migration Register Rules, Release Process, Definition of Done, Current Priorities, Known Technical Debt, and Future Roadmap.
+This file is intended to grow to cover: Project Vision, System Architecture, Customer Workspace Architecture, Platform Admin Architecture, Database Standards, AI Orchestrator, Knowledge Graph, Carry Forward Engine, Government Contracting Rules, Coding Standards, Testing Standards, Migration Register Rules (in detail), Release Process, Definition of Done, Current Priorities, Known Technical Debt, and Future Roadmap.
