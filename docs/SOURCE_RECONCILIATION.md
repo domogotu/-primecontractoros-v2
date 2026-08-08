@@ -56,7 +56,7 @@ This ledger prevents old designs, generated manuals, and historical runtime repo
 
 Before legal/publication approval, verify:
 
-1. Entity name consistency: `Reed's Solutions LLC` versus `Reeds Solutions LLC` in official business records and branding.
+1. Official business records and branding consistently use `Reeds Solutions LLC`.
 2. Hosting locations, backup locations, encryption at rest/in transit, and deletion behavior.
 3. CUI/ITAR/DFARS handling boundaries and explicit prohibition or supported scope.
 4. Subprocessor inventory and data-processing agreements.
