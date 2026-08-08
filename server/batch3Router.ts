@@ -3,7 +3,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "./_core/trpc";
 import { getDb } from "./db";
 import { planFeatures, emailTemplates, invites } from "../drizzle/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { requireWorkspaceId } from "./workspaceMiddleware";
 import { logAudit } from "./featureRouter";
 
@@ -59,7 +59,14 @@ export const diagnosticsRouter = router({
     return { database: "connected", workspace: wsId, timestamp: new Date().toISOString(), version: "1.0.0", features: { onboarding: true, notes: true, timeline: true, subcontractors: true, vendors: true } };
   }),
   runCheck: protectedProcedure.input(z.object({ checkType: z.string() })).mutation(async ({ ctx, input }) => {
-    return { checkType: input.checkType, status: "passed", details: "All checks passed", timestamp: new Date().toISOString() };
+    const db = await getDb();
+    const wsId = await requireWorkspaceId(ctx.user.id);
+    try {
+      await db.select({ id: invites.id }).from(invites).where(eq(invites.workspaceId, wsId)).limit(1);
+      return { checkType: input.checkType, status: "passed", details: "Database and workspace access verified", timestamp: new Date().toISOString() };
+    } catch (error) {
+      return { checkType: input.checkType, status: "failed", details: error instanceof Error ? error.message : "Diagnostic check failed", timestamp: new Date().toISOString() };
+    }
   }),
 });
 
@@ -79,7 +86,8 @@ export const invitesRouter = router({
   }),
   revoke: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
-    await db.update(invites).set({ status: "revoked" }).where(eq(invites.id, input.id));
+    const wsId = await requireWorkspaceId(ctx.user.id);
+    await db.update(invites).set({ status: "revoked" }).where(and(eq(invites.id, input.id), eq(invites.workspaceId, wsId)));
     return { success: true };
   }),
 });

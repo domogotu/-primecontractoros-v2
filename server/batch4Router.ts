@@ -23,7 +23,8 @@ export const documentGenerationRouter = router({
   }),
   get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
-    const rows = await db.select().from(generatedDocuments).where(eq(generatedDocuments.id, input.id));
+    const wsId = await requireWorkspaceId(ctx.user.id);
+    const rows = await db.select().from(generatedDocuments).where(and(eq(generatedDocuments.id, input.id), eq(generatedDocuments.workspaceId, wsId)));
     return rows[0] || null;
   }),
 });
@@ -45,7 +46,7 @@ export const flowdownReviewsRouter = router({
     const db = await getDb();
     const { wsId } = await enforcePermission(ctx.user.id, "write");
     const { id, ...data } = input;
-    await db.update(flowdownReviews).set(data).where(eq(flowdownReviews.id, id));
+    await db.update(flowdownReviews).set(data).where(and(eq(flowdownReviews.id, id), eq(flowdownReviews.workspaceId, wsId)));
     try { await logAudit(wsId, ctx.user.id, "update", "flowdownReviews", id, input); } catch {}
     return { success: true };
   }),
