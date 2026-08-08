@@ -47,7 +47,9 @@ jobs:
           ref: agent/v2-modernization-phase2
           fetch-depth: 0
       - name: Apply hardening
-        run: python scripts/phase2_legacy_harden.py
+        run: |
+          python scripts/phase2_legacy_harden.py
+          python scripts/phase2_legacy_typefix.py
       - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm drizzle-kit migrate
@@ -58,7 +60,9 @@ jobs:
         run: |
           rm -f .github/workflows/phase2-legacy-router-hardening.yml
           rm -f .github/workflows/phase2-legacy-router-hardening-v2.yml
+          rm -f .github/workflows/phase2-legacy-router-hardening-v3.yml
           rm -f scripts/phase2_legacy_harden.py
+          rm -f scripts/phase2_legacy_typefix.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
