@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -359,25 +358,27 @@ export const appRouter = router({
           const { contacts: contactsTbl, files: filesTbl, notes: notesTbl, tasks: tasksTbl, contactLinks, fileLinks } = await import("../drizzle/schema");
           const opportunity = await getOpportunity(input.opportunityId, wsId);
           if (!opportunity) throw new Error("Opportunity not found");
-          const proposalId = await createProposal({
+          const proposalResult = await createProposal({
             workspaceId: wsId,
             title: input.proposalTitle,
             opportunityId: input.opportunityId,
             framework: input.framework,
             dueDate: opportunity.dueDate || undefined,
           });
+          const proposalId = typeof proposalResult === "number" ? proposalResult : Number((proposalResult as any)?.[0]?.insertId ?? (proposalResult as any)?.insertId);
+          if (!proposalId) throw new Error("Proposal creation did not return an insert id");
           const cf = input.carryForward || { contacts: true, files: true, notes: true, tasks: false };
           const { and: andOp, eq: eqOp } = await import("drizzle-orm");
           if (cf.contacts) {
             const linked = await db.select().from(contactsTbl).where(andOp(eqOp(contactsTbl.workspaceId, wsId), eqOp(contactsTbl.linkedRecordType, "opportunity"), eqOp(contactsTbl.linkedRecordId, input.opportunityId)));
             for (const c of linked) {
-              await db.insert(contactLinks).values({ contactId: c.id, linkedRecordType: "proposal", linkedRecordId: proposalId, workspaceId: wsId });
+              await db.insert(contactLinks).values({ contactId: c.id, recordType: "proposal", recordId: proposalId, workspaceId: wsId });
             }
           }
           if (cf.files) {
             const linked = await db.select().from(filesTbl).where(andOp(eqOp(filesTbl.workspaceId, wsId), eqOp(filesTbl.linkedRecordType, "opportunity"), eqOp(filesTbl.linkedRecordId, input.opportunityId)));
             for (const f of linked) {
-              await db.insert(fileLinks).values({ fileId: f.id, linkedRecordType: "proposal", linkedRecordId: proposalId, workspaceId: wsId });
+              await db.insert(fileLinks).values({ fileId: f.id, targetType: "proposal", targetId: proposalId, linkType: "carry_forward", workspaceId: wsId });
             }
           }
           if (cf.notes) {
@@ -387,7 +388,7 @@ export const appRouter = router({
             }
           }
           if (cf.tasks) {
-            const linked = await db.select().from(tasksTbl).where(andOp(eqOp(tasksTbl.workspaceId, wsId), eqOp(tasksTbl.linkedRecordType, "opportunity"), eqOp(tasksTbl.linkedRecordId, input.opportunityId), eqOp(tasksTbl.status, "open")));
+            const linked = await db.select().from(tasksTbl).where(andOp(eqOp(tasksTbl.workspaceId, wsId), eqOp(tasksTbl.linkedRecordType, "opportunity"), eqOp(tasksTbl.linkedRecordId, input.opportunityId), eqOp(tasksTbl.status, "todo")));
             for (const t of linked) {
               await db.insert(tasksTbl).values({ workspaceId: wsId, title: t.title, description: t.description, assignedTo: t.assignedTo, linkedRecordType: "proposal", linkedRecordId: proposalId, priority: t.priority, dueDate: t.dueDate });
             }
@@ -520,27 +521,29 @@ export const appRouter = router({
           const { wsId } = await enforcePermission(ctx.user.id, "write");
           const db = await getDb();
           if (!db) throw new Error("Database not available");
-          const { contacts: contactsTbl, files: filesTbl, notes: notesTbl, tasks: tasksTbl, deliverables: deliverablesTbl, contactLinks, fileLinks } = await import("../drizzle/schema");
+          const { contacts: contactsTbl, files: filesTbl, notes: notesTbl, tasks: tasksTbl, contactLinks, fileLinks } = await import("../drizzle/schema");
           const { and: andOp, eq: eqOp } = await import("drizzle-orm");
           const proposal = await getProposal(input.proposalId, wsId);
           if (!proposal) throw new Error("Proposal not found");
-          const contractId = await createContract({
+          const contractResult = await createContract({
             workspaceId: wsId,
             title: input.contractTitle,
             proposalId: input.proposalId,
             contractNumber: input.contractNumber || undefined,
           });
+          const contractId = typeof contractResult === "number" ? contractResult : Number((contractResult as any)?.[0]?.insertId ?? (contractResult as any)?.insertId);
+          if (!contractId) throw new Error("Contract creation did not return an insert id");
           const cf = input.carryForward || { contacts: true, files: true, notes: true, tasks: false, deliverables: true };
           if (cf.contacts) {
             const linked = await db.select().from(contactsTbl).where(andOp(eqOp(contactsTbl.workspaceId, wsId), eqOp(contactsTbl.linkedRecordType, "proposal"), eqOp(contactsTbl.linkedRecordId, input.proposalId)));
             for (const c of linked) {
-              await db.insert(contactLinks).values({ contactId: c.id, linkedRecordType: "contract", linkedRecordId: contractId, workspaceId: wsId });
+              await db.insert(contactLinks).values({ contactId: c.id, recordType: "contract", recordId: contractId, workspaceId: wsId });
             }
           }
           if (cf.files) {
             const linked = await db.select().from(filesTbl).where(andOp(eqOp(filesTbl.workspaceId, wsId), eqOp(filesTbl.linkedRecordType, "proposal"), eqOp(filesTbl.linkedRecordId, input.proposalId)));
             for (const f of linked) {
-              await db.insert(fileLinks).values({ fileId: f.id, linkedRecordType: "contract", linkedRecordId: contractId, workspaceId: wsId });
+              await db.insert(fileLinks).values({ fileId: f.id, targetType: "contract", targetId: contractId, linkType: "carry_forward", workspaceId: wsId });
             }
           }
           if (cf.notes) {
@@ -550,21 +553,26 @@ export const appRouter = router({
             }
           }
           if (cf.tasks) {
-            const linked = await db.select().from(tasksTbl).where(andOp(eqOp(tasksTbl.workspaceId, wsId), eqOp(tasksTbl.linkedRecordType, "proposal"), eqOp(tasksTbl.linkedRecordId, input.proposalId), eqOp(tasksTbl.status, "open")));
+            const linked = await db.select().from(tasksTbl).where(andOp(eqOp(tasksTbl.workspaceId, wsId), eqOp(tasksTbl.linkedRecordType, "proposal"), eqOp(tasksTbl.linkedRecordId, input.proposalId), eqOp(tasksTbl.status, "todo")));
             for (const t of linked) {
               await db.insert(tasksTbl).values({ workspaceId: wsId, title: t.title, description: t.description, assignedTo: t.assignedTo, linkedRecordType: "contract", linkedRecordId: contractId, priority: t.priority, dueDate: t.dueDate });
             }
           }
           if (cf.deliverables) {
-            const linked = await db.select().from(deliverablesTbl).where(andOp(eqOp(deliverablesTbl.workspaceId, wsId), eqOp(deliverablesTbl.linkedRecordType, "proposal"), eqOp(deliverablesTbl.linkedRecordId, input.proposalId)));
-            for (const d of linked) {
-              await db.insert(deliverablesTbl).values({ workspaceId: wsId, title: d.title, description: d.description, linkedRecordType: "contract", linkedRecordId: contractId, dueDate: d.dueDate, status: "pending" });
-            }
+            await db.insert(tasksTbl).values({
+              workspaceId: wsId,
+              title: "Establish contract deliverables from governing award",
+              description: "Review the awarded contract, proposal requirements, amendments, and acceptance terms. Create contract deliverable records only after confirming the governing award requirements; proposal records are not treated as contract deliverables automatically.",
+              linkedRecordType: "contract",
+              linkedRecordId: contractId,
+              priority: "high",
+              status: "todo",
+            });
           }
           await updateProposalStatus(input.proposalId, wsId, "won");
           try { await logAudit(wsId, ctx.user.id, "update", "proposals", 0, input); } catch {}
           dispatchWebhookEvent(wsId, "opportunity.converted", { proposalId: input.proposalId, contractId }).catch(() => {});
-          return { success: true, contractId: contractId };
+          return { success: true, contractId, deliverablesPendingAwardReview: cf.deliverables };
         } catch (error) {
           console.error("Error converting proposal to contract:", error);
           throw error;
@@ -953,7 +961,7 @@ export const appRouter = router({
           ipAddress,
           userAgent,
         });
-        try { await logAudit(workspaceId, ctx.user.id, "update", "legal", 0, input); } catch {}
+        if (workspaceId) { try { await logAudit(workspaceId, userId, "update", "legal", 0, input); } catch {} }
         return { success: true };
       }),
     // List consent history for the current user
