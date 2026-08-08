@@ -1,192 +1,75 @@
-# PrimeContractorOS
+# PrimeContractorOS V2
 
-**Your Guided Operating System for Government Contracting**
+**Development and controlled-modernization repository for PrimeContractorOS**
 
-> This is the **development repository (v2)**. Production lives at [domogotu/primecontractoros](https://github.com/domogotu/primecontractoros). See `CLAUDE.md` for the modernization workflow governing this repo.
+> Production reference: `domogotu/primecontractoros`  
+> Development repository: `domogotu/-primecontractoros-v2`
 
-PrimeContractorOS is a full-stack web application that helps prime contractors and subcontractors manage the complete government contracting lifecycle — from opportunity tracking to proposal building, contract management, compliance, and closeout.
+PrimeContractorOS is the government-contracting operating system owned by **Reeds Solutions LLC**. It is intended to support the lifecycle from opportunity intake through proposal, award, contract operations, finance, closeout, and lessons learned.
 
----
+## Current repository status
 
-## Tech Stack
+This V2 repository is **not yet a complete runnable mirror of production**.
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 19, Tailwind CSS 4, shadcn/ui |
-| Backend | Express 4, tRPC 11 |
-| Database | MySQL / TiDB (via Drizzle ORM) |
-| Auth | Manus OAuth |
-| Language | TypeScript (end-to-end) |
-| Build | Vite 6, esbuild |
-| Testing | Vitest |
+At the current control checkpoint, the repository contains V2 documentation, the separate `unified-ai-ecosystem/` workstream, and only a limited subset of PrimeContractorOS application source. Do not treat filenames, historical reports, screenshots, or this README as proof that the full application currently builds or that a listed feature is implemented.
 
----
+Before feature remediation begins, the complete production application tree must be mirrored safely into V2, reconciled with V2-only files, and validated with install, typecheck, lint, test, build, migration, security, route, API, schema, and integration inventories.
 
-## Features
+## Repository safety rules
 
-- **Opportunities** — Track and manage government contracting opportunities with status workflows
-- **Proposals** — Build and manage proposals linked to opportunities
-- **Contracts** — Full contract lifecycle management with Contract Hub
-- **Files, Contacts, Messages** — Linked records for each workspace
-- **Finance & Invoicing** — Invoice and payment tracking
-- **Tasks & Alerts** — Workspace-level task and alert management
-- **AI Guidance** — LLM-powered suggestions and compliance insights
-- **Platform Admin** — Owner-level workspace directory, plans, discounts, billing, and support management
-- **Onboarding** — Mandatory guided setup for new workspaces
+- Treat `domogotu/primecontractoros` as a **read-only production reference** during V2 development.
+- Perform PrimeContractorOS development only in V2 branches and pull requests.
+- Never copy `.git`, dependencies, build outputs, caches, local databases, uploads, `.env*`, credentials, tokens, connection strings, or customer data into V2.
+- Never hardcode credentials or API keys as source-code fallbacks.
+- Do not promote V2 to production without explicit owner approval after release gates pass.
+- Keep PrimeContractorOS and `unified-ai-ecosystem/` as separate workstreams.
 
----
+## Required reading
 
-## Prerequisites
+Before changing PrimeContractorOS, read:
 
-- Node.js 22+
-- pnpm 9+
-- MySQL or TiDB database
-- Manus OAuth credentials (or compatible OAuth provider)
+1. `CLAUDE.md`
+2. `docs/AUTHORITATIVE_REQUIREMENTS_REGISTER.md`
+3. `docs/SOURCE_RECONCILIATION.md`
+4. `docs/V2_EXECUTION_BACKLOG.md`
+5. `docs/ACCEPTANCE_TRACEABILITY_MATRIX.md`
+6. `docs/MASTER_SPECIFICATION.md` when present and reconciled
+7. `MIGRATION_REGISTER.md`
 
----
+These documents define repository boundaries, intended behavior, evidence rules, execution gates, and acceptance criteria.
 
-## Local Development Setup
+## PrimeContractorOS target architecture
 
-### 1. Clone the repository
+The production/reference application has historically used a TypeScript stack centered on React, Express, tRPC, Drizzle ORM, MySQL/TiDB-compatible persistence, Vite, and Vitest. The exact V2 toolchain, versions, scripts, dependencies, routes, schema, integrations, and environment requirements must be regenerated from the complete mirrored codebase before they are treated as current V2 facts.
 
-```bash
-git clone https://github.com/domogotu/-primecontractoros-v2.git
-cd -primecontractoros-v2
-```
+## Lifecycle target
 
-### 2. Install dependencies
+`Opportunity -> Proposal -> Awarded Contract -> Active Operations -> Finance -> Closeout -> Lessons Learned`
 
-```bash
-pnpm install
-```
+Core requirements include workspace isolation, role enforcement, real persistence, auditability, functional navigation, source-linked review-first AI, carry-forward of approved data, separate contract finance and SaaS billing, and no fake customer-facing success states.
 
-### 3. Configure environment variables
+## Development checkpoint
 
-Create a `.env` file in the project root:
+The immediate PrimeContractorOS objective is:
 
-```env
-# Database
-DATABASE_URL=mysql://user:password@localhost:3306/primecontractoros
+1. Secure the V2 repository.
+2. Complete a safe full-tree production-to-V2 mirror.
+3. Reconcile V2-only and already-modernized files intentionally.
+4. Produce a baseline build and architecture report.
+5. Verify security and tenancy.
+6. Repair schema/API/UI contracts.
+7. Complete routes, pages, actions, lifecycle, finance, AI, legal/operations, and release gates in order.
 
-# Auth
-JWT_SECRET=your-jwt-secret-here
-VITE_APP_ID=your-manus-app-id
-OAUTH_SERVER_URL=https://oauth.manus.im
-VITE_OAUTH_PORTAL_URL=https://portal.manus.im
+See `docs/V2_EXECUTION_BACKLOG.md` for the controlled execution sequence.
 
-# Owner info (set after first login)
-OWNER_OPEN_ID=
-OWNER_NAME=
+## Separate Unified AI Ecosystem workstream
 
-# Email, AI, opportunity search
-RESEND_API_KEY=
-OPENAI_API_KEY=
-SAM_GOV_API_KEY=
+`unified-ai-ecosystem/` is a separate project. Its specifications, build status, workflow exports, and phase gates must not be interpreted as PrimeContractorOS application requirements unless explicitly approved as a cross-project integration.
 
-# Payments
-STRIPE_SECRET_KEY=
-STRIPE_PUBLISHABLE_KEY=
-STRIPE_WEBHOOK_SECRET=
+## Visibility
 
-# Manus built-in APIs (optional, for AI/file features)
-BUILT_IN_FORGE_API_URL=
-BUILT_IN_FORGE_API_KEY=
-VITE_FRONTEND_FORGE_API_KEY=
-VITE_FRONTEND_FORGE_API_URL=
-```
-
-**Never hardcode any of these values as fallbacks in source code.** This project has twice had a Resend API key leak through a hardcoded fallback in `server/services/email.ts` (auto-revoked by Resend both times). Environment-only, no exceptions.
-
-### 4. Push database schema
-
-```bash
-pnpm db:push
-```
-
-### 5. Start the development server
-
-```bash
-pnpm dev
-```
-
-The app will be available at `http://localhost:3000`.
-
----
-
-## Project Structure
-
-```
-primecontractoros-v2/
-├── client/                  # React frontend
-│   ├── src/
-│   │   ├── pages/           # Page-level components
-│   │   ├── components/      # Reusable UI components
-│   │   ├── contexts/        # React contexts
-│   │   ├── hooks/           # Custom hooks
-│   │   ├── lib/trpc.ts      # tRPC client binding
-│   │   ├── App.tsx          # Routes & layout
-│   │   └── index.css        # Global styles
-│   └── public/              # Static assets
-├── drizzle/                 # Database schema & migrations
-│   └── schema.ts            # All table definitions (108 tables)
-├── server/                  # Express backend
-│   ├── _core/               # Framework plumbing (auth, tRPC, OAuth, env)
-│   ├── routers.ts           # Main tRPC router
-│   ├── platformRouter.ts    # Platform admin procedures
-│   ├── db.ts                # Database query helpers
-│   └── services/             # Email, billing, file storage, guidance engine
-├── docs/
-│   └── MASTER_SPECIFICATION.md  # Full engineering specification
-└── shared/                  # Shared types and constants
-```
-
----
-
-## Available Scripts
-
-| Command | Description |
-|---------|-------------|
-| `pnpm dev` | Start development server |
-| `pnpm build` | Build for production |
-| `pnpm test` | Run Vitest tests |
-| `pnpm check` | TypeScript type checking (no emit) |
-| `pnpm db:push` | Generate and apply database migrations |
-| `pnpm format` | Format code with Prettier |
-
----
-
-## Authentication
-
-The app uses **Manus OAuth** for authentication. When a user logs in:
-
-1. They are redirected to the Manus OAuth portal
-2. After authentication, they are redirected back to `/api/oauth/callback`
-3. A session cookie (`app_session_id`) is set and the user is routed to onboarding (first time) or dashboard
-
-**Platform admin access** is determined by `user.role === 'admin'` in the database. To promote a user to admin, update the `role` field in the `users` table.
-
----
-
-## Platform Admin
-
-The platform admin area (`/platform`) is accessible only to users with `role = 'admin'`. It provides:
-
-- **Workspace Directory** — View and manage all customer workspaces
-- **Plans** — Create and manage subscription plans
-- **Discounts** — Manage promotional codes
-- **Billing** — Track workspace activations and billing
-- **Support Inbox** — Manage customer support tickets
-- **Overrides** — Admin-level configuration overrides
-
----
-
-## Related Documentation
-
-- `CLAUDE.md` — Claude Code project context and modernization workflow (this repo)
-- `docs/MASTER_SPECIFICATION.md` — Full engineering specification
-
----
+The repository should be treated as proprietary development material. If GitHub reports the repository as public, changing repository visibility to **Private** is a repository-administration action that must be completed before sensitive or complete application source is mirrored into V2.
 
 ## License
 
-Private — Reed's Solutions LLC. All rights reserved.
+Private/proprietary — **Reeds Solutions LLC. All rights reserved.**
