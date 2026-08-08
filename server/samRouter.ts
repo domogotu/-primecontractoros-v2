@@ -138,7 +138,8 @@ export const samRouter = router({
         lastSyncedAt: new Date(),
       });
 
-      const opportunityId = (insertResult as any)?.[0]?.insertId;
+      const opportunityId = resolveInsertId(insertResult);
+      if (!opportunityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Opportunity import did not return an insert id" });
 
       // 7. Save attachments as source files
       let attachmentWarning: string | null = null;
@@ -284,7 +285,7 @@ export const samRouter = router({
         // Update opportunity sync status
         await db.update(opportunities)
           .set({ importStatus: "sync_failed" })
-          .where(eq(opportunities.id, input.opportunityId));
+          .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, wsId)));
 
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -336,11 +337,11 @@ export const samRouter = router({
             importStatus: "synced",
             lastSyncedAt: new Date(),
           })
-          .where(eq(opportunities.id, input.opportunityId));
+          .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, wsId)));
       } else {
         await db.update(opportunities)
           .set({ importStatus: "synced", lastSyncedAt: new Date() })
-          .where(eq(opportunities.id, input.opportunityId));
+          .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, wsId)));
       }
 
       // Save new attachments if any
@@ -351,6 +352,7 @@ export const samRouter = router({
             .select()
             .from(opportunitySourceFiles)
             .where(and(
+              eq(opportunitySourceFiles.workspaceId, wsId),
               eq(opportunitySourceFiles.opportunityId, input.opportunityId),
               eq(opportunitySourceFiles.fileName, att.name || "Unnamed")
             ))
@@ -461,6 +463,11 @@ export const samRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
+      const dupCheck = await checkForDuplicate(db, wsId, input.noticeId, input.noticeId, input.solicitationNumber || null, input.sourceLink || null);
+      if (dupCheck.isDuplicate) {
+        return { success: false, isDuplicate: true, existingId: dupCheck.existingId, id: dupCheck.existingId || 0 };
+      }
+
       const result = await db.insert(opportunities).values({
         workspaceId: wsId,
         title: input.title,
@@ -483,7 +490,7 @@ export const samRouter = router({
       });
 
       try { await logAudit(wsId, ctx.user.id, "create", "opportunities", 0, { source: "sam.gov", noticeId: input.noticeId }); } catch {}
-      return { success: true, id: (result as any)?.[0]?.insertId || 0 };
+      return { success: true, id: resolveInsertId(result) };
     }),
 
   // ─── Bulk Import from Search Results ──────────────────────────────────────
@@ -516,7 +523,8 @@ export const samRouter = router({
         totalItems: input.opportunities.length,
         importedBy: ctx.user.id,
       });
-      const runId = (runResult as any)?.[0]?.insertId;
+      const runId = resolveInsertId(runResult);
+      if (!runId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Import run did not return an insert id" });
 
       let importedCount = 0;
       let skippedCount = 0;
@@ -554,12 +562,31 @@ export const samRouter = router({
             pursuitDecision: "undecided",
             createdBy: ctx.user.id,
           });
-          const oppId = (result as any)?.[0]?.insertId;
+          const oppId = resolveInsertId(result);
           if (oppId) importedIds.push(oppId);
           importedCount++;
         } catch (err: any) {
           console.error("[SAM Bulk Import] Failed to import:", opp.noticeId, err.message);
           failedCount++;
+        }
+      }
+
+      if (input.triggerAiReview && importedIds.length > 0) {
+        const { runOpportunityReview } = await import("./aiEngine");
+        for (const opportunityId of importedIds) {
+          try {
+            const [importedOpportunity] = await db.select().from(opportunities)
+              .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, wsId)))
+              .limit(1);
+            if (importedOpportunity) {
+              await runOpportunityReview(
+                { workspaceId: wsId, userId: ctx.user.id, recordType: "opportunity", recordId: opportunityId, runType: "opportunity_review" },
+                JSON.stringify(importedOpportunity)
+              );
+            }
+          } catch (err: any) {
+            console.error("[SAM Bulk Import] AI review failed for opportunity", opportunityId, err?.message || err);
+          }
         }
       }
 
@@ -573,7 +600,7 @@ export const samRouter = router({
         importedOpportunityIds: importedIds,
         triggeredAiReview: input.triggerAiReview,
         completedAt: new Date(),
-      }).where(eq(opportunityImportRuns.id, runId));
+      }).where(and(eq(opportunityImportRuns.id, runId), eq(opportunityImportRuns.workspaceId, wsId)));
 
       // Log
       await db.insert(samImportLogs).values({
@@ -642,6 +669,13 @@ export const samRouter = router({
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function resolveInsertId(result: unknown): number {
+  if (typeof result === "number") return result;
+  const anyResult = result as any;
+  return Number(anyResult?.[0]?.insertId ?? anyResult?.insertId ?? 0);
+}
+
 
 function categorizeAttachment(name?: string, type?: string): "source_notice" | "solicitation" | "amendment" | "attachment" | "supporting_document" | "screenshot" | "other" {
   const lower = (name || "").toLowerCase();
