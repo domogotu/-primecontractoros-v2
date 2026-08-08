@@ -1,0 +1,73 @@
+name: Phase 3 phase35 type hardening v3
+on:
+  push:
+    branches: [agent/v2-modernization-phase3]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase3-validation-only-not-a-secret
+      VITE_APP_ID: phase3-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase3-owner
+      OWNER_NAME: Phase3 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase3-validation
+      SAM_GOV_API_KEY: phase3-test
+      STRIPE_SECRET_KEY: sk_test_phase3_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase3_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase3_validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v2-modernization-phase3
+          fetch-depth: 0
+      - name: Repair remaining phase35 type errors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server/phase35Router.ts')
+          s = p.read_text()
+          if s.startswith('// @ts-nocheck\n'):
+              s = s[len('// @ts-nocheck\n'):]
+          s = s.replace('hasSAM: !!(profile?.samStatus && profile.samStatus !== "unknown"),', 'hasSAM: !!profile?.samStatus,')
+          s = s.replace('hasNAICS: !!(profile?.primaryNaics),', 'hasNAICS: !!profile?.naicsPrimary,')
+          s = s.replace('status: "pending",\n        priority: suggestion.priority || "medium",', 'status: "todo",\n        priority: suggestion.priority || "medium",')
+          s = s.replace('        createdBy: ctx.user.id,\n', '')
+          p.write_text(s)
+          PY
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified type hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/phase35Router.ts
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "fix(phase3): remove phase35 type suppression and repair schema mismatches"
+            git push origin HEAD:agent/v2-modernization-phase3
+          fi
