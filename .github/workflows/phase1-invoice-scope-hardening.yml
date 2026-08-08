@@ -58,13 +58,13 @@ jobs:
           p = Path('server/entityRouters.ts')
           s = p.read_text()
 
-          anchor = '''async function requireFinanceDelete(ctx: any): Promise<number> {
+          finance_delete = '''async function requireFinanceDelete(ctx: any): Promise<number> {
             if (!ctx.user?.id) throw new Error("Not authenticated");
             const { wsId } = await enforceAction(ctx.user.id, "manage_invoices");
             return wsId;
           }
           '''
-          replacement = anchor + '''
+          helpers = '''
           async function requireInvoiceInWorkspace(invoiceId: number, workspaceId: number) {
             const invoice = await getInvoiceById(invoiceId, workspaceId);
             if (!invoice) throw new Error("Invoice not found");
@@ -77,74 +77,68 @@ jobs:
             return payment;
           }
           '''
-          if anchor not in s:
-            raise SystemExit('finance helper anchor not found')
-          s = s.replace(anchor, replacement, 1)
+          if 'async function requireInvoiceInWorkspace' not in s:
+            if finance_delete not in s:
+              raise SystemExit('finance helper anchor not found')
+            s = s.replace(finance_delete, finance_delete + helpers, 1)
 
-          old = '''  updateStatus: protectedProcedure
-            .input(z.object({ id: z.number(), oldStatus: z.string(), newStatus: z.string(), notes: z.string().optional() }))
-            .mutation(async ({ ctx, input }) => {
-              const wsId = await requireFinanceWrite(ctx);
-              await updateInvoice(input.id, wsId, { status: input.newStatus } as any);
-              await addInvoiceStatusHistory({ invoiceId: input.id, oldStatus: input.oldStatus, newStatus: input.newStatus, changedBy: ctx.user.id, notes: input.notes });
-              try { await logAudit(wsId, ctx.user.id, "delete", "invoices", input.id, null); } catch {}
-              return { success: true };
-            }),
-          statusHistory: protectedProcedure
-            .input(z.object({ invoiceId: z.number() }))
-            .query(async ({ input }) => {
+          target = '      await updateInvoice(input.id, wsId, { status: input.newStatus } as any);'
+          if 'await requireInvoiceInWorkspace(input.id, wsId);' not in s:
+            if target not in s:
+              raise SystemExit('status update anchor not found')
+            s = s.replace(target, '      await requireInvoiceInWorkspace(input.id, wsId);\n' + target, 1)
+
+          bad_audit = '      try { await logAudit(wsId, ctx.user.id, "delete", "invoices", input.id, null); } catch {}'
+          good_audit = '      try { await logAudit(wsId, ctx.user.id, "update", "invoices", input.id, { oldStatus: input.oldStatus, newStatus: input.newStatus, notes: input.notes }); } catch {}'
+          if bad_audit in s:
+            s = s.replace(bad_audit, good_audit, 1)
+
+          old_history = '''    .query(async ({ input }) => {
               return getInvoiceStatusHistory(input.invoiceId);
-            }),
-          paymentLinks: protectedProcedure
-            .input(z.object({ invoiceId: z.number() }))
-            .query(async ({ input }) => {
+            }),'''
+          new_history = '''    .query(async ({ ctx, input }) => {
+              const wsId = await getWorkspaceId(ctx);
+              await requireInvoiceInWorkspace(input.invoiceId, wsId);
+              return getInvoiceStatusHistory(input.invoiceId);
+            }),'''
+          if old_history in s:
+            s = s.replace(old_history, new_history, 1)
+
+          old_links = '''    .query(async ({ input }) => {
               return getPaymentLinksForInvoice(input.invoiceId);
-            }),
-          linkPayment: protectedProcedure
-            .input(z.object({ invoiceId: z.number(), paymentId: z.number(), amount: z.string() }))
-            .mutation(async ({ input, ctx }) => {
+            }),'''
+          new_links = '''    .query(async ({ ctx, input }) => {
+              const wsId = await getWorkspaceId(ctx);
+              await requireInvoiceInWorkspace(input.invoiceId, wsId);
+              return getPaymentLinksForInvoice(input.invoiceId);
+            }),'''
+          if old_links in s:
+            s = s.replace(old_links, new_links, 1)
+
+          old_link_mutation = '''    .mutation(async ({ input, ctx }) => {
               const wsId = await requireWrite(ctx);
               try { await logAudit(wsId, ctx.user.id, "create", "invoicePaymentLink", 0, input); } catch {}
               return linkPaymentToInvoice(input);
-            }),
-          '''
-          new = '''  updateStatus: protectedProcedure
-            .input(z.object({ id: z.number(), oldStatus: z.string(), newStatus: z.string(), notes: z.string().optional() }))
-            .mutation(async ({ ctx, input }) => {
-              const wsId = await requireFinanceWrite(ctx);
-              await requireInvoiceInWorkspace(input.id, wsId);
-              await updateInvoice(input.id, wsId, { status: input.newStatus } as any);
-              await addInvoiceStatusHistory({ invoiceId: input.id, oldStatus: input.oldStatus, newStatus: input.newStatus, changedBy: ctx.user.id, notes: input.notes });
-              try { await logAudit(wsId, ctx.user.id, "update", "invoices", input.id, { oldStatus: input.oldStatus, newStatus: input.newStatus, notes: input.notes }); } catch {}
-              return { success: true };
-            }),
-          statusHistory: protectedProcedure
-            .input(z.object({ invoiceId: z.number() }))
-            .query(async ({ ctx, input }) => {
-              const wsId = await getWorkspaceId(ctx);
-              await requireInvoiceInWorkspace(input.invoiceId, wsId);
-              return getInvoiceStatusHistory(input.invoiceId);
-            }),
-          paymentLinks: protectedProcedure
-            .input(z.object({ invoiceId: z.number() }))
-            .query(async ({ ctx, input }) => {
-              const wsId = await getWorkspaceId(ctx);
-              await requireInvoiceInWorkspace(input.invoiceId, wsId);
-              return getPaymentLinksForInvoice(input.invoiceId);
-            }),
-          linkPayment: protectedProcedure
-            .input(z.object({ invoiceId: z.number(), paymentId: z.number(), amount: z.string() }))
-            .mutation(async ({ input, ctx }) => {
+            }),'''
+          new_link_mutation = '''    .mutation(async ({ input, ctx }) => {
               const wsId = await requireFinanceWrite(ctx);
               await requireInvoiceInWorkspace(input.invoiceId, wsId);
               await requirePaymentInWorkspace(input.paymentId, wsId);
               try { await logAudit(wsId, ctx.user.id, "create", "invoicePaymentLink", 0, input); } catch {}
               return linkPaymentToInvoice(input);
-            }),
-          '''
-          if old not in s:
-            raise SystemExit('invoice router target block not found')
-          s = s.replace(old, new, 1)
+            }),'''
+          if old_link_mutation in s:
+            s = s.replace(old_link_mutation, new_link_mutation, 1)
+
+          required = [
+            'await requireInvoiceInWorkspace(input.id, wsId);',
+            'await requireInvoiceInWorkspace(input.invoiceId, wsId);',
+            'await requirePaymentInWorkspace(input.paymentId, wsId);',
+            'logAudit(wsId, ctx.user.id, "update", "invoices"',
+          ]
+          missing = [x for x in required if x not in s]
+          if missing:
+            raise SystemExit('hardening incomplete: ' + ', '.join(missing))
           p.write_text(s)
           PY
 
@@ -161,19 +155,19 @@ jobs:
           const source = readFileSync(join(here, "entityRouters.ts"), "utf8");
 
           describe("invoice workspace isolation regressions", () => {
-            it("requires invoice ownership before status history, payment-link reads, and status mutation", () => {
+            it("guards invoice child reads and status changes with workspace ownership", () => {
               expect(source).toContain("await requireInvoiceInWorkspace(input.id, wsId);");
               expect(source).toContain("await requireInvoiceInWorkspace(input.invoiceId, wsId);");
             });
 
-            it("requires both invoice and payment ownership before linking a payment", () => {
+            it("requires finance permission and both parent records before linking payments", () => {
               const linkBlock = source.slice(source.indexOf("linkPayment: protectedProcedure"), source.indexOf("// Line Items"));
               expect(linkBlock).toContain("const wsId = await requireFinanceWrite(ctx);");
               expect(linkBlock).toContain("await requireInvoiceInWorkspace(input.invoiceId, wsId);");
               expect(linkBlock).toContain("await requirePaymentInWorkspace(input.paymentId, wsId);");
             });
 
-            it("records invoice status changes as updates rather than deletes", () => {
+            it("records invoice status changes as updates", () => {
               const statusBlock = source.slice(source.indexOf("updateStatus: protectedProcedure"), source.indexOf("statusHistory: protectedProcedure"));
               expect(statusBlock).toContain('logAudit(wsId, ctx.user.id, "update", "invoices"');
               expect(statusBlock).not.toContain('logAudit(wsId, ctx.user.id, "delete", "invoices"');
