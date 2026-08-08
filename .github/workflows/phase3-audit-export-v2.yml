@@ -1,0 +1,122 @@
+name: Phase 3 audit log export v2
+on:
+  push:
+    branches: [agent/phase3-audit-export]
+    paths: [.github/workflows/phase3-audit-export-v2.yml]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase3-validation-only-not-a-secret
+      VITE_APP_ID: phase3-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase3-owner
+      OWNER_NAME: Phase3 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase3-validation
+      SAM_GOV_API_KEY: phase3-test
+      STRIPE_SECRET_KEY: sk_test_phase3_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase3_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase3-validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/phase3-audit-export
+          fetch-depth: 0
+      - name: Implement schema-accurate CSV export and typed audit UI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('client/src/pages/AuditLog.tsx')
+          s=p.read_text()
+          s=s.replace('// @ts-nocheck\n','',1)
+          # Replace placeholder exporter or prior draft exporter with a schema-accurate CSV exporter.
+          start=s.index('  const handleExport = () => {')
+          end=s.index('\n  };', start)+5
+          new='''  const handleExport = () => {
+    if (filteredLogs.length === 0) {
+      toast({ title: "Nothing to export", description: "No audit records match the current filters." });
+      return;
+    }
+    const escapeCsv = (value: unknown) => {
+      const text = value == null ? "" : value instanceof Date ? value.toISOString() : String(value);
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const rows = filteredLogs.map((log) => [
+      log.id,
+      log.timestamp,
+      log.workspaceId,
+      log.userId,
+      log.action,
+      log.entity,
+      log.entityId,
+      log.changes ?? "",
+    ]);
+    const csv = [
+      ["Event ID", "Timestamp", "Workspace ID", "User ID", "Action", "Record Type", "Record ID", "Changes"],
+      ...rows,
+    ].map(row => row.map(escapeCsv).join(",")).join("\\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `primecontractoros-audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast({ title: "Export complete", description: `${filteredLogs.length} audit records exported as CSV.` });
+  };'''
+          s=s[:start]+new+s[end:]
+          s=s.replace('import { useLocation } from "wouter";\n','')
+          s=s.replace('  const [, setLocation] = useLocation();\n','')
+          # Replace UI fields that never existed in the audit schema with truthful stored data.
+          s=s.replace('<span className="col-span-2 font-mono text-foreground">{log.ip}</span>', '<span className="col-span-2 font-mono text-foreground">Workspace #{log.workspaceId}</span>')
+          s=s.replace('<span className="col-span-2 text-foreground">{log.userEmail}</span>', '<span className="col-span-2 text-foreground">User #{log.userId}</span>')
+          s=s.replace('IP Address:', 'Workspace:')
+          s=s.replace('User Email:', 'User:')
+          # The table stores a single changes payload, not fabricated before/after columns.
+          import re
+          s=re.sub(r'''<div className="grid grid-cols-2 gap-4">.*?</div>\n\s*</div>''', '''<div className="bg-background border border-border rounded p-3">
+                                <div className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">Recorded Changes</div>
+                                <pre className="text-xs text-foreground overflow-x-auto whitespace-pre-wrap">
+                                  {log.changes || "No change payload recorded."}
+                                </pre>
+                              </div>
+                          </div>''', s, count=1, flags=re.S)
+          p.write_text(s)
+          PY
+      - name: Verify fake fields and fake export are gone
+        run: |
+          ! grep -n 'Export Started\|being generated\|log\.ip\|log\.userEmail\|log\.before\|log\.after' client/src/pages/AuditLog.tsx
+          grep -n 'text/csv\|Workspace ID\|Recorded Changes' client/src/pages/AuditLog.tsx
+          ! head -n 1 client/src/pages/AuditLog.tsx | grep '@ts-nocheck'
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified audit export
+        run: |
+          git config user.name "PrimeContractorOS Validation"
+          git config user.email "actions@users.noreply.github.com"
+          git add client/src/pages/AuditLog.tsx
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "fix(audit): export real logs and align UI with schema"
+          git push origin HEAD:agent/phase3-audit-export
