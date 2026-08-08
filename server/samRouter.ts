@@ -20,6 +20,7 @@ import { opportunities, samImportLogs, opportunitySourceFiles, opportunityImport
 import { logAudit } from "./featureRouter";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { persistSamAttachment } from "./services/samAttachmentStorage";
 
 export const samRouter = router({
   // ─── Existing Search Routes ────────────────────────────────────────────────
@@ -141,32 +142,59 @@ export const samRouter = router({
       const opportunityId = resolveInsertId(insertResult);
       if (!opportunityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Opportunity import did not return an insert id" });
 
-      // 7. Save attachments as source files
-      let attachmentWarning: string | null = null;
-      if (fetchResult.attachments && fetchResult.attachments.length > 0) {
-        let savedCount = 0;
-        for (const att of fetchResult.attachments) {
-          try {
-            await db.insert(opportunitySourceFiles).values({
-              workspaceId: wsId,
-              opportunityId,
-              fileName: att.name || "Unnamed Attachment",
-              fileUrl: att.url || null,
-              fileType: att.type || null,
-              sourceSystem: "sam.gov",
-              sourceCategory: categorizeAttachment(att.name, att.type),
-              isDownloaded: false,
-              isSourceDocument: att.type === "related_notice" || att.name?.toLowerCase().includes("solicitation"),
-            });
-            savedCount++;
-          } catch (err) {
-            console.warn("[SAM Import] Failed to save attachment:", att.name, err);
-          }
-        }
-        if (savedCount < fetchResult.attachments.length) {
-          attachmentWarning = `Opportunity imported, but ${fetchResult.attachments.length - savedCount} of ${fetchResult.attachments.length} source attachments could not be saved. Links were preserved for review.`;
+      // 7. Save attachments as source files and persist eligible source documents
+let attachmentWarning: string | null = null;
+if (fetchResult.attachments && fetchResult.attachments.length > 0) {
+  let savedCount = 0;
+  let downloadWarnings = 0;
+  for (const att of fetchResult.attachments) {
+    try {
+      const sourceFileResult = await db.insert(opportunitySourceFiles).values({
+        workspaceId: wsId,
+        opportunityId,
+        fileName: att.name || "Unnamed Attachment",
+        fileUrl: att.url || null,
+        fileType: att.type || null,
+        sourceSystem: "sam.gov",
+        sourceCategory: categorizeAttachment(att.name, att.type),
+        isDownloaded: false,
+        isSourceDocument: att.type === "related_notice" || att.name?.toLowerCase().includes("solicitation"),
+      });
+      const sourceFileId = resolveInsertId(sourceFileResult);
+      if (sourceFileId && att.url && att.type !== "related_notice") {
+        const persisted = await persistSamAttachment({
+          workspaceId: wsId,
+          opportunityId,
+          fileName: att.name || "Unnamed Attachment",
+          sourceUrl: att.url,
+          declaredType: att.type || null,
+        });
+        if (persisted.downloaded && persisted.storagePath) {
+          await db.update(opportunitySourceFiles).set({
+            isDownloaded: true,
+            downloadedFilePath: persisted.storagePath,
+            fileType: persisted.contentType || att.type || null,
+          }).where(and(
+            eq(opportunitySourceFiles.id, sourceFileId),
+            eq(opportunitySourceFiles.workspaceId, wsId),
+            eq(opportunitySourceFiles.opportunityId, opportunityId),
+          ));
+        } else if (persisted.warning) {
+          downloadWarnings++;
+          console.warn("[SAM Import] Attachment retained as source link:", att.name, persisted.warning);
         }
       }
+      savedCount++;
+    } catch (err) {
+      console.warn("[SAM Import] Failed to save attachment:", att.name, err);
+    }
+  }
+  if (savedCount < fetchResult.attachments.length) {
+    attachmentWarning = `Opportunity imported, but ${fetchResult.attachments.length - savedCount} of ${fetchResult.attachments.length} source attachments could not be saved. Available links were preserved for review.`;
+  } else if (downloadWarnings > 0) {
+    attachmentWarning = `Opportunity imported with all source links preserved; ${downloadWarnings} attachment(s) were not eligible for automatic local storage.`;
+  }
+}
 
       // 8. Log successful import
       await db.insert(samImportLogs).values({
@@ -344,35 +372,57 @@ export const samRouter = router({
           .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, wsId)));
       }
 
-      // Save new attachments if any
-      if (fetchResult.attachments && fetchResult.attachments.length > 0) {
-        for (const att of fetchResult.attachments) {
-          // Check if already exists
-          const [existingFile] = await db
-            .select()
-            .from(opportunitySourceFiles)
-            .where(and(
-              eq(opportunitySourceFiles.workspaceId, wsId),
-              eq(opportunitySourceFiles.opportunityId, input.opportunityId),
-              eq(opportunitySourceFiles.fileName, att.name || "Unnamed")
-            ))
-            .limit(1);
+      // Save and persist newly discovered attachments
+if (fetchResult.attachments && fetchResult.attachments.length > 0) {
+  for (const att of fetchResult.attachments) {
+    const [existingFile] = await db
+      .select()
+      .from(opportunitySourceFiles)
+      .where(and(
+        eq(opportunitySourceFiles.workspaceId, wsId),
+        eq(opportunitySourceFiles.opportunityId, input.opportunityId),
+        eq(opportunitySourceFiles.fileName, att.name || "Unnamed")
+      ))
+      .limit(1);
 
-          if (!existingFile) {
-            await db.insert(opportunitySourceFiles).values({
-              workspaceId: wsId,
-              opportunityId: input.opportunityId,
-              fileName: att.name || "Unnamed Attachment",
-              fileUrl: att.url || null,
-              fileType: att.type || null,
-              sourceSystem: "sam.gov",
-              sourceCategory: categorizeAttachment(att.name, att.type),
-              isDownloaded: false,
-              isSourceDocument: false,
-            });
-          }
+    if (!existingFile) {
+      const sourceFileResult = await db.insert(opportunitySourceFiles).values({
+        workspaceId: wsId,
+        opportunityId: input.opportunityId,
+        fileName: att.name || "Unnamed Attachment",
+        fileUrl: att.url || null,
+        fileType: att.type || null,
+        sourceSystem: "sam.gov",
+        sourceCategory: categorizeAttachment(att.name, att.type),
+        isDownloaded: false,
+        isSourceDocument: att.type === "related_notice" || att.name?.toLowerCase().includes("solicitation"),
+      });
+      const sourceFileId = resolveInsertId(sourceFileResult);
+      if (sourceFileId && att.url && att.type !== "related_notice") {
+        const persisted = await persistSamAttachment({
+          workspaceId: wsId,
+          opportunityId: input.opportunityId,
+          fileName: att.name || "Unnamed Attachment",
+          sourceUrl: att.url,
+          declaredType: att.type || null,
+        });
+        if (persisted.downloaded && persisted.storagePath) {
+          await db.update(opportunitySourceFiles).set({
+            isDownloaded: true,
+            downloadedFilePath: persisted.storagePath,
+            fileType: persisted.contentType || att.type || null,
+          }).where(and(
+            eq(opportunitySourceFiles.id, sourceFileId),
+            eq(opportunitySourceFiles.workspaceId, wsId),
+            eq(opportunitySourceFiles.opportunityId, input.opportunityId),
+          ));
+        } else if (persisted.warning) {
+          console.warn("[SAM Resync] Attachment retained as source link:", att.name, persisted.warning);
         }
       }
+    }
+  }
+}
 
       // Log sync
       await db.insert(samImportLogs).values({
