@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { router, protectedProcedure } from "./_core/trpc";
 import { z } from "zod";
 import { getDb } from "./db";
@@ -437,8 +436,8 @@ export const dashboardDataRouter = router({
       hasBusinessProfile: !!profile,
       hasUEI: !!(profile?.uei),
       hasCAGE: !!(profile?.cage),
-      hasSAM: !!(profile?.samStatus && profile.samStatus !== "unknown"),
-      hasNAICS: !!(profile?.primaryNaics),
+      hasSAM: !!profile?.samStatus,
+      hasNAICS: !!profile?.naicsPrimary,
       profileComplete: false,
     };
     checks.profileComplete = checks.hasUEI && checks.hasCAGE && checks.hasSAM && checks.hasNAICS;
@@ -484,11 +483,10 @@ export const aiSuggestionsEnhancedRouter = router({
         workspaceId,
         title: suggestion.suggestionTitle,
         description: suggestion.suggestionText,
-        status: "pending",
+        status: "todo",
         priority: suggestion.priority || "medium",
         linkedRecordType: suggestion.relatedRecordType,
         linkedRecordId: suggestion.relatedRecordId,
-        createdBy: ctx.user.id,
       });
 
       // Update suggestion status
