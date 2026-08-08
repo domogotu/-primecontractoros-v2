@@ -1,0 +1,76 @@
+name: Phase 3 phase35 tenancy repair
+
+on:
+  push:
+    branches:
+      - agent/v2-modernization-phase3
+    paths:
+      - .github/workflows/phase3-phase35-tenancy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase3-validation-only-not-a-secret
+      VITE_APP_ID: phase3-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase3-owner
+      OWNER_NAME: Phase3 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase3-validation
+      SAM_GOV_API_KEY: phase3-test
+      STRIPE_SECRET_KEY: sk_test_phase3_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase3_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase3_validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v2-modernization-phase3
+          fetch-depth: 0
+      - name: Repair phase35 workspace resolution
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server/phase35Router.ts')
+          s = p.read_text()
+          count = s.count('requireWorkspaceId(ctx)')
+          if count == 0:
+              raise SystemExit('No requireWorkspaceId(ctx) defects found; aborting to avoid blind commit')
+          s = s.replace('requireWorkspaceId(ctx)', 'await requireWorkspaceId(ctx.user.id)')
+          p.write_text(s)
+          print(f'Repaired {count} workspace-resolution calls')
+          Path('server/phase35Tenancy.test.ts').write_text('''import { describe, expect, it } from "vitest";\nimport { readFileSync } from "node:fs";\nimport { fileURLToPath } from "node:url";\nimport { dirname, join } from "node:path";\nconst here = dirname(fileURLToPath(import.meta.url));\nconst source = readFileSync(join(here, "phase35Router.ts"), "utf8");\ndescribe("phase35 workspace isolation", () => {\n  it("never passes the tRPC context object to requireWorkspaceId", () => {\n    expect(source).not.toContain("requireWorkspaceId(ctx)");\n    expect(source).toContain("await requireWorkspaceId(ctx.user.id)");\n  });\n});\n''')
+          PY
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified repair
+        run: |
+          rm -f .github/workflows/phase3-phase35-tenancy.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(phase3): repair phase35 workspace resolution'
+          git push origin HEAD:agent/v2-modernization-phase3
