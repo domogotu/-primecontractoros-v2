@@ -1,0 +1,276 @@
+name: Phase 1 AI tenancy hardening
+
+on:
+  push:
+    branches:
+      - agent/v2-modernization-phase1
+    paths:
+      - .github/workflows/phase1-ai-tenancy-hardening.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase1-validation-only-not-a-secret
+      VITE_APP_ID: phase1-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase1-owner
+      OWNER_NAME: Phase1 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase1-validation
+      SAM_GOV_API_KEY: phase1-test
+      STRIPE_SECRET_KEY: sk_test_phase1_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase1_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase1_validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v2-modernization-phase1
+          fetch-depth: 0
+
+      - name: Harden AI tenant boundaries
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('server/aiRouter.ts')
+          s=p.read_text()
+
+          def rep(old,new,label,count=1):
+            global s
+            if old not in s:
+              raise SystemExit(label+' target missing')
+            s=s.replace(old,new,count)
+
+          rep('import { router, protectedProcedure } from "./_core/trpc";','import { router, protectedProcedure } from "./_core/trpc";\nimport { TRPCError } from "@trpc/server";\nimport { requireWorkspaceId } from "./workspaceMiddleware";','imports')
+          rep('// ============================================================\n// Conversion helpers — Phase 1','''async function requireActiveWorkspace(ctx: any, requestedWorkspaceId?: number): Promise<number> {
+            if (!ctx.user?.id) throw new TRPCError({ code: "UNAUTHORIZED" });
+            const workspaceId = await requireWorkspaceId(ctx.user.id);
+            if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== workspaceId) {
+              throw new TRPCError({ code: "FORBIDDEN", message: "Workspace access denied" });
+            }
+            return workspaceId;
+          }
+
+          async function requireAiRunInWorkspace(runId: number, workspaceId: number) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const [run] = await db.select().from(aiRuns).where(and(eq(aiRuns.id, runId), eq(aiRuns.workspaceId, workspaceId))).limit(1);
+            if (!run) throw new TRPCError({ code: "NOT_FOUND", message: "AI run not found" });
+            return run;
+          }
+
+          async function requireFindingInWorkspace(findingId: number, workspaceId: number) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const [finding] = await db.select().from(aiFindings).where(and(eq(aiFindings.id, findingId), eq(aiFindings.workspaceId, workspaceId))).limit(1);
+            if (!finding) throw new TRPCError({ code: "NOT_FOUND", message: "Finding not found" });
+            return finding;
+          }
+
+          async function requireSuggestionInWorkspace(suggestionId: number, workspaceId: number) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const [suggestion] = await db.select().from(aiSuggestions).where(and(eq(aiSuggestions.id, suggestionId), eq(aiSuggestions.workspaceId, workspaceId))).limit(1);
+            if (!suggestion) throw new TRPCError({ code: "NOT_FOUND", message: "Suggestion not found" });
+            return suggestion;
+          }
+
+          async function requireObligationInWorkspace(obligationId: number, workspaceId: number) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const [obligation] = await db.select().from(aiExtractedObligations).where(and(eq(aiExtractedObligations.id, obligationId), eq(aiExtractedObligations.workspaceId, workspaceId))).limit(1);
+            if (!obligation) throw new TRPCError({ code: "NOT_FOUND", message: "Obligation not found" });
+            return obligation;
+          }
+
+          // ============================================================
+          // Conversion helpers — Phase 1''','helpers')
+
+          # All caller-supplied workspace IDs must match active membership.
+          s=s.replace('.query(async ({ input }) => {','.query(async ({ ctx, input }) => {')
+          s=s.replace('.mutation(async ({ input }) => {','.mutation(async ({ ctx, input }) => {')
+          lines=s.splitlines(); out=[]
+          for line in lines:
+            out.append(line)
+            if '.query(async ({ ctx, input }) => {' in line or '.mutation(async ({ ctx, input }) => {' in line:
+              indent=line[:len(line)-len(line.lstrip())]+'  '
+              out.append(indent+'await requireActiveWorkspace(ctx, (input as any)?.workspaceId);')
+          s='\n'.join(out)+'\n'
+
+          # Run detail is ID-only: validate parent workspace before child reads.
+          old='''        const [run] = await (await getDb())!.select().from(aiRuns).where(eq(aiRuns.id, input.runId));
+                if (!run) throw new Error("AI run not found");'''
+          new='''        const workspaceId = await requireActiveWorkspace(ctx);
+                const run = await requireAiRunInWorkspace(input.runId, workspaceId);'''
+          rep(old,new,'run get')
+
+          # Finding detail and review state are ID-only.
+          old='''        const [finding] = await (await getDb())!.select().from(aiFindings).where(eq(aiFindings.id, input.findingId));
+                if (!finding) throw new Error("Finding not found");'''
+          new='''        const workspaceId = await requireActiveWorkspace(ctx);
+                const finding = await requireFindingInWorkspace(input.findingId, workspaceId);'''
+          rep(old,new,'finding get')
+          old='''        const db = await getDb();
+                const [finding] = await db!.select().from(aiFindings).where(eq(aiFindings.id, input.findingId));
+                if (!finding) throw new Error("Finding not found");'''
+          new='''        const db = await getDb();
+                const workspaceId = await requireActiveWorkspace(ctx);
+                const finding = await requireFindingInWorkspace(input.findingId, workspaceId);'''
+          rep(old,new,'finding review')
+          rep('await db!.update(aiFindings).set(updateData).where(eq(aiFindings.id, input.findingId));','await db!.update(aiFindings).set(updateData).where(and(eq(aiFindings.id, input.findingId), eq(aiFindings.workspaceId, workspaceId)));','finding review update')
+
+          # Bulk findings: each ID must belong to active workspace.
+          old='''        const db = await getDb();
+                const results: Array<{ findingId: number; recordType: string | null; recordId: number | null }> = [];
+
+                for (const id of input.findingIds) {
+                  const [finding] = await db!.select().from(aiFindings).where(eq(aiFindings.id, id));
+                  if (!finding) continue;'''
+          new='''        const db = await getDb();
+                const workspaceId = await requireActiveWorkspace(ctx);
+                const results: Array<{ findingId: number; recordType: string | null; recordId: number | null }> = [];
+
+                for (const id of input.findingIds) {
+                  let finding;
+                  try { finding = await requireFindingInWorkspace(id, workspaceId); } catch { continue; }'''
+          rep(old,new,'bulk findings')
+          rep('await db!.update(aiFindings).set(updateData).where(eq(aiFindings.id, id));','await db!.update(aiFindings).set(updateData).where(and(eq(aiFindings.id, id), eq(aiFindings.workspaceId, workspaceId)));','bulk finding update')
+
+          # Mark stale must first establish run ownership.
+          old='''      .mutation(async ({ ctx, input }) => {
+                await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+                await (await getDb())!.update(aiFindings).set({ staleStatus: "stale" }).where(eq(aiFindings.aiRunId, input.runId));'''
+          new='''      .mutation(async ({ ctx, input }) => {
+                await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+                const workspaceId = await requireActiveWorkspace(ctx);
+                await requireAiRunInWorkspace(input.runId, workspaceId);
+                await (await getDb())!.update(aiFindings).set({ staleStatus: "stale" }).where(and(eq(aiFindings.aiRunId, input.runId), eq(aiFindings.workspaceId, workspaceId)));'''
+          rep(old,new,'mark stale')
+
+          # Suggestion status updates need parent ownership.
+          old='''      .mutation(async ({ ctx, input }) => {
+                await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+                const updateData: any = { status: input.status };'''
+          new='''      .mutation(async ({ ctx, input }) => {
+                await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+                const workspaceId = await requireActiveWorkspace(ctx);
+                await requireSuggestionInWorkspace(input.suggestionId, workspaceId);
+                const updateData: any = { status: input.status };'''
+          rep(old,new,'suggestion status')
+          rep('await (await getDb())!.update(aiSuggestions).set(updateData).where(eq(aiSuggestions.id, input.suggestionId));','await (await getDb())!.update(aiSuggestions).set(updateData).where(and(eq(aiSuggestions.id, input.suggestionId), eq(aiSuggestions.workspaceId, workspaceId)));','suggestion update')
+
+          # Obligation approve/reject/bulk need tenant parent validation.
+          old='''        const db = await getDb();
+                const [obligation] = await db!.select().from(aiExtractedObligations).where(eq(aiExtractedObligations.id, input.obligationId));
+                if (!obligation) throw new Error("Obligation not found");'''
+          new='''        const db = await getDb();
+                const workspaceId = await requireActiveWorkspace(ctx);
+                const obligation = await requireObligationInWorkspace(input.obligationId, workspaceId);'''
+          rep(old,new,'obligation approve')
+          rep('await db!.update(aiExtractedObligations).set(updateData).where(eq(aiExtractedObligations.id, input.obligationId));','await db!.update(aiExtractedObligations).set(updateData).where(and(eq(aiExtractedObligations.id, input.obligationId), eq(aiExtractedObligations.workspaceId, workspaceId)));','obligation approve update')
+
+          old='''      .mutation(async ({ ctx, input }) => {
+                await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+                await (await getDb())!.update(aiExtractedObligations).set({
+                  approvalState: "rejected",
+                }).where(eq(aiExtractedObligations.id, input.obligationId));'''
+          new='''      .mutation(async ({ ctx, input }) => {
+                await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+                const workspaceId = await requireActiveWorkspace(ctx);
+                await requireObligationInWorkspace(input.obligationId, workspaceId);
+                await (await getDb())!.update(aiExtractedObligations).set({
+                  approvalState: "rejected",
+                }).where(and(eq(aiExtractedObligations.id, input.obligationId), eq(aiExtractedObligations.workspaceId, workspaceId)));'''
+          rep(old,new,'obligation reject')
+
+          old='''        const db = await getDb();
+                const results: Array<{ obligationId: number; recordType: string | null; recordId: number | null }> = [];
+
+                for (const id of input.obligationIds) {
+                  const [obligation] = await db!.select().from(aiExtractedObligations).where(eq(aiExtractedObligations.id, id));
+                  if (!obligation) continue;'''
+          new='''        const db = await getDb();
+                const workspaceId = await requireActiveWorkspace(ctx);
+                const results: Array<{ obligationId: number; recordType: string | null; recordId: number | null }> = [];
+
+                for (const id of input.obligationIds) {
+                  let obligation;
+                  try { obligation = await requireObligationInWorkspace(id, workspaceId); } catch { continue; }'''
+          rep(old,new,'bulk obligations')
+          rep('await db!.update(aiExtractedObligations).set(updateData).where(eq(aiExtractedObligations.id, id));','await db!.update(aiExtractedObligations).set(updateData).where(and(eq(aiExtractedObligations.id, id), eq(aiExtractedObligations.workspaceId, workspaceId)));','bulk obligation update')
+
+          # Parent-finding lookup during conversion must remain within obligation workspace.
+          rep('const [parentFinding] = await db.select().from(aiFindings).where(eq(aiFindings.id, obligation.findingId));','const [parentFinding] = await db.select().from(aiFindings).where(and(eq(aiFindings.id, obligation.findingId), eq(aiFindings.workspaceId, obligation.workspaceId)));','obligation parent finding')
+
+          required=['Workspace access denied','requireAiRunInWorkspace(input.runId, workspaceId)','requireFindingInWorkspace(input.findingId, workspaceId)','requireSuggestionInWorkspace(input.suggestionId, workspaceId)','requireObligationInWorkspace(input.obligationId, workspaceId)','eq(aiFindings.workspaceId, workspaceId)','eq(aiExtractedObligations.workspaceId, workspaceId)']
+          for x in required:
+            if x not in s: raise SystemExit('missing invariant '+x)
+          p.write_text(s)
+          PY
+
+      - name: Add AI tenancy regression coverage
+        shell: bash
+        run: |
+          cat > server/aiTenancy.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+          import { readFileSync } from "node:fs";
+          import { fileURLToPath } from "node:url";
+          import { dirname, join } from "node:path";
+          const here=dirname(fileURLToPath(import.meta.url));
+          const source=readFileSync(join(here,"aiRouter.ts"),"utf8");
+          describe("AI workspace isolation",()=>{
+            it("rejects foreign workspace identifiers",()=>{
+              expect(source).toContain("requireWorkspaceId(ctx.user.id)");
+              expect(source).toContain("Workspace access denied");
+              expect(source.match(/requireActiveWorkspace\(ctx, \(input as any\)\?\.workspaceId\)/g)?.length || 0).toBeGreaterThan(10);
+            });
+            it("validates ID-only AI parents through workspace-scoped helpers",()=>{
+              expect(source).toContain("requireAiRunInWorkspace(input.runId, workspaceId)");
+              expect(source).toContain("requireFindingInWorkspace(input.findingId, workspaceId)");
+              expect(source).toContain("requireSuggestionInWorkspace(input.suggestionId, workspaceId)");
+              expect(source).toContain("requireObligationInWorkspace(input.obligationId, workspaceId)");
+            });
+            it("scopes finding and obligation writes",()=>{
+              expect(source).toContain("eq(aiFindings.workspaceId, workspaceId)");
+              expect(source).toContain("eq(aiExtractedObligations.workspaceId, workspaceId)");
+            });
+          });
+          EOF
+
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified AI hardening
+        shell: bash
+        run: |
+          rm -f .github/workflows/phase1-ai-tenancy-hardening.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(security): enforce AI workspace isolation'
+          git push origin HEAD:agent/v2-modernization-phase1
