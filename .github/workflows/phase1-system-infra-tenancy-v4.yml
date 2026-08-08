@@ -1,0 +1,253 @@
+name: Phase 1 system infrastructure tenancy v4
+
+on:
+  push:
+    branches:
+      - agent/v2-modernization-phase1
+    paths:
+      - .github/workflows/phase1-system-infra-tenancy-v4.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase1-validation-only-not-a-secret
+      VITE_APP_ID: phase1-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase1-owner
+      OWNER_NAME: Phase1 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase1-validation
+      SAM_GOV_API_KEY: phase1-test
+      STRIPE_SECRET_KEY: sk_test_phase1_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase1_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase1_validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v2-modernization-phase1
+          fetch-depth: 0
+
+      - name: Apply deterministic tenancy patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('server/systemInfraRouter.ts')
+          s=p.read_text()
+
+          def rep(old,new,label):
+              global s
+              if old not in s:
+                  raise SystemExit(f'{label} target missing')
+              s=s.replace(old,new,1)
+
+          rep('import { router, protectedProcedure } from "./_core/trpc";',
+              'import { router, protectedProcedure } from "./_core/trpc";\nimport { TRPCError } from "@trpc/server";\nimport { requireWorkspaceId } from "./workspaceMiddleware";',
+              'imports')
+
+          rep('''export const systemInfraRouter = router({''','''async function requireActiveWorkspace(ctx: any, requestedWorkspaceId?: number): Promise<number> {
+            if (!ctx.user?.id) throw new TRPCError({ code: "UNAUTHORIZED" });
+            const workspaceId = await requireWorkspaceId(ctx.user.id);
+            if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== workspaceId) {
+              throw new TRPCError({ code: "FORBIDDEN", message: "Workspace access denied" });
+            }
+            return workspaceId;
+          }
+
+          async function requireSupportTicketInWorkspace(ticketId: number, workspaceId: number) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const [ticket] = await db.select().from(supportTickets)
+              .where(and(eq(supportTickets.id, ticketId), eq(supportTickets.workspaceId, workspaceId)))
+              .limit(1);
+            if (!ticket) throw new TRPCError({ code: "NOT_FOUND", message: "Support ticket not found" });
+            return ticket;
+          }
+
+          export const systemInfraRouter = router({''','helpers')
+
+          # Generic guards for all required-workspace callbacks in this router.
+          lines=s.splitlines()
+          out=[]
+          for i,line in enumerate(lines):
+              if '.query(async ({ input }) => {' in line:
+                  line=line.replace('.query(async ({ input }) => {','.query(async ({ ctx, input }) => {')
+              elif '.mutation(async ({ input }) => {' in line:
+                  line=line.replace('.mutation(async ({ input }) => {','.mutation(async ({ ctx, input }) => {')
+              out.append(line)
+              if '.query(async ({ ctx, input }) => {' in line or '.mutation(async ({ ctx, input }) => {' in line:
+                  prior='\n'.join(lines[max(0,i-15):i])
+                  if 'workspaceId: z.number()' in prior and 'workspaceId: z.number().optional()' not in prior:
+                      indent=line[:len(line)-len(line.lstrip())]+'  '
+                      out.append(indent+'await requireActiveWorkspace(ctx, input.workspaceId);')
+          s='\n'.join(out)+'\n'
+
+          rep('''    markRead: protectedProcedure
+              .input(z.object({ notificationId: z.number() }))
+              .mutation(async ({ ctx, input }) => {
+                const db = await getDb();
+                if (!db) return { success: false };
+                await db.update(notifications).set({ isRead: true }).where(eq(notifications.id, input.notificationId));
+                return { success: true };
+              }),''','''    markRead: protectedProcedure
+              .input(z.object({ notificationId: z.number() }))
+              .mutation(async ({ ctx, input }) => {
+                const db = await getDb();
+                if (!db) return { success: false };
+                const wsId = await requireActiveWorkspace(ctx);
+                await db.update(notifications).set({ isRead: true })
+                  .where(and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, wsId)));
+                return { success: true };
+              }),''','markRead')
+
+          rep('''    dismiss: protectedProcedure
+              .input(z.object({ notificationId: z.number() }))
+              .mutation(async ({ ctx, input }) => {
+                const db = await getDb();
+                if (!db) return { success: false };
+                await db.update(notifications).set({ dismissedAt: new Date() }).where(eq(notifications.id, input.notificationId));
+                return { success: true };
+              }),''','''    dismiss: protectedProcedure
+              .input(z.object({ notificationId: z.number() }))
+              .mutation(async ({ ctx, input }) => {
+                const db = await getDb();
+                if (!db) return { success: false };
+                const wsId = await requireActiveWorkspace(ctx);
+                await db.update(notifications).set({ dismissedAt: new Date() })
+                  .where(and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, wsId)));
+                return { success: true };
+              }),''','dismiss')
+
+          rep('''        const conditions: any[] = [];
+                if (input?.workspaceId) conditions.push(eq(supportTickets.workspaceId, input.workspaceId));
+                if (input?.status) conditions.push(eq(supportTickets.status, input.status as any));''','''        const wsId = await requireActiveWorkspace(ctx, input?.workspaceId);
+                const conditions: any[] = [eq(supportTickets.workspaceId, wsId)];
+                if (input?.status) conditions.push(eq(supportTickets.status, input.status as any));''','support list')
+
+          rep('''      .mutation(async ({ ctx, input }) => {
+                await requireActiveWorkspace(ctx, input.workspaceId);
+                const db = await getDb();
+                if (!db) return { success: false };
+                await db.insert(supportTickets).values({
+                  ...input,
+                  userId: ctx.user.id,
+                });
+                await logAuditEvent({
+                  workspaceId: input.workspaceId,''','''      .mutation(async ({ ctx, input }) => {
+                const wsId = await requireActiveWorkspace(ctx, input.workspaceId);
+                const db = await getDb();
+                if (!db) return { success: false };
+                await db.insert(supportTickets).values({
+                  ...input,
+                  workspaceId: wsId,
+                  userId: ctx.user.id,
+                });
+                await logAuditEvent({
+                  workspaceId: wsId,''','support create')
+
+          rep('''      .mutation(async ({ ctx, input }) => {
+                const db = await getDb();
+                if (!db) return { success: false };
+                const updateData: any = { status: input.status };''','''      .mutation(async ({ ctx, input }) => {
+                const db = await getDb();
+                if (!db) return { success: false };
+                const wsId = await requireActiveWorkspace(ctx);
+                await requireSupportTicketInWorkspace(input.id, wsId);
+                const updateData: any = { status: input.status };''','support update')
+
+          rep('''        await db.update(supportTickets).set(updateData).where(eq(supportTickets.id, input.id));''','''        await db.update(supportTickets).set(updateData)
+                .where(and(eq(supportTickets.id, input.id), eq(supportTickets.workspaceId, wsId)));''','support update predicate')
+
+          rep('''      .mutation(async ({ ctx, input }) => {
+                await logAuditEvent({
+                  workspaceId: 0,
+                  userId: ctx.user.id,
+                  actionType: "note",
+                  targetType: "support_ticket",
+                  targetId: input.ticketId,''','''      .mutation(async ({ ctx, input }) => {
+                const wsId = await requireActiveWorkspace(ctx);
+                await requireSupportTicketInWorkspace(input.ticketId, wsId);
+                await logAuditEvent({
+                  workspaceId: wsId,
+                  userId: ctx.user.id,
+                  actionType: "note",
+                  targetType: "support_ticket",
+                  targetId: input.ticketId,''','support note')
+
+          for x in [
+              'Workspace access denied',
+              'and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, wsId))',
+              'const conditions: any[] = [eq(supportTickets.workspaceId, wsId)]',
+              'requireSupportTicketInWorkspace(input.id, wsId)',
+              'requireSupportTicketInWorkspace(input.ticketId, wsId)',
+          ]:
+              if x not in s: raise SystemExit('missing '+x)
+          p.write_text(s)
+          PY
+
+      - name: Add regression coverage
+        run: |
+          cat > server/systemInfraTenancy.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+          import { readFileSync } from "node:fs";
+          import { fileURLToPath } from "node:url";
+          import { dirname, join } from "node:path";
+          const here=dirname(fileURLToPath(import.meta.url));
+          const source=readFileSync(join(here,"systemInfraRouter.ts"),"utf8");
+          describe("system infrastructure tenancy",()=>{
+            it("rejects foreign workspace ids",()=>{
+              expect(source).toContain("requireWorkspaceId(ctx.user.id)");
+              expect(source).toContain("Workspace access denied");
+              expect(source.match(/requireActiveWorkspace\(ctx, input\.workspaceId\)/g)?.length || 0).toBeGreaterThan(7);
+            });
+            it("scopes notification id mutations",()=>{
+              expect(source).toContain("and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, wsId))");
+            });
+            it("always scopes support ticket listing",()=>{
+              expect(source).toContain("const conditions: any[] = [eq(supportTickets.workspaceId, wsId)]");
+            });
+            it("validates support ticket parent ownership",()=>{
+              const support=source.slice(source.indexOf("support: router({"));
+              expect(support).toContain("requireSupportTicketInWorkspace(input.id, wsId)");
+              expect(support).toContain("requireSupportTicketInWorkspace(input.ticketId, wsId)");
+              expect(support).not.toContain("workspaceId: 0");
+            });
+          });
+          EOF
+
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified changes
+        run: |
+          rm -f .github/workflows/phase1-system-infra-tenancy-v4.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(security): enforce system infrastructure workspace isolation'
+          git push origin HEAD:agent/v2-modernization-phase1
