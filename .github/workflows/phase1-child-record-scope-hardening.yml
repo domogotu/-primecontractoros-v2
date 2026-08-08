@@ -1,0 +1,237 @@
+name: Phase 1 child-record scope hardening
+
+on:
+  push:
+    branches:
+      - agent/v2-modernization-phase1
+    paths:
+      - .github/workflows/phase1-child-record-scope-hardening.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase1-validation-only-not-a-secret
+      VITE_APP_ID: phase1-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase1-owner
+      OWNER_NAME: Phase1 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase1-validation
+      SAM_GOV_API_KEY: phase1-test
+      STRIPE_SECRET_KEY: sk_test_phase1_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase1_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase1_validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v2-modernization-phase1
+          fetch-depth: 0
+
+      - name: Patch scoped child-record data access
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          dbp = Path('server/entityDb.ts')
+          db = dbp.read_text()
+
+          old_contact_create = '''export async function createContactLink(data: { contactId: number; linkedRecordType: string; linkedRecordId: number; role?: string }) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const { contactLinks } = await import("../drizzle/schema");
+            const result = await db.insert(contactLinks).values({ ...data, createdAt: new Date() } as any);
+            return { id: result[0].insertId };
+          }'''
+          new_contact_create = '''export async function createContactLink(data: { workspaceId: number; contactId: number; recordType: string; recordId: number; role?: string }) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const { contactLinks } = await import("../drizzle/schema");
+            const result = await db.insert(contactLinks).values({ ...data, createdAt: new Date() } as any);
+            return { id: result[0].insertId };
+          }'''
+          if old_contact_create not in db:
+            raise SystemExit('createContactLink target not found')
+          db = db.replace(old_contact_create, new_contact_create, 1)
+
+          old_contact_list = '''export async function getContactLinksForRecord(linkedRecordType: string, linkedRecordId: number) {
+            const db = await getDb();
+            if (!db) return [];
+            const { contactLinks } = await import("../drizzle/schema");
+            return db.select().from(contactLinks).where(and(eq(contactLinks.recordType, linkedRecordType), eq(contactLinks.recordId, linkedRecordId)));
+          }'''
+          new_contact_list = '''export async function getContactLinksForRecord(workspaceId: number, recordType: string, recordId: number) {
+            const db = await getDb();
+            if (!db) return [];
+            const { contactLinks } = await import("../drizzle/schema");
+            return db.select().from(contactLinks).where(and(eq(contactLinks.workspaceId, workspaceId), eq(contactLinks.recordType, recordType), eq(contactLinks.recordId, recordId)));
+          }'''
+          if old_contact_list not in db:
+            raise SystemExit('getContactLinksForRecord target not found')
+          db = db.replace(old_contact_list, new_contact_list, 1)
+
+          old_versions = '''export async function listFileVersions(fileId: number) {
+            const db = await getDb();
+            if (!db) return [];
+            const { fileVersions } = await import("../drizzle/schema");
+            return db.select().from(fileVersions).where(eq(fileVersions.fileId, fileId)).orderBy(fileVersions.versionNumber);
+          }'''
+          new_versions = '''export async function listFileVersions(fileId: number, workspaceId: number) {
+            const db = await getDb();
+            if (!db) return [];
+            const { fileVersions } = await import("../drizzle/schema");
+            return db.select().from(fileVersions).where(and(eq(fileVersions.fileId, fileId), eq(fileVersions.workspaceId, workspaceId))).orderBy(fileVersions.versionNumber);
+          }'''
+          if old_versions not in db:
+            raise SystemExit('listFileVersions target not found')
+          db = db.replace(old_versions, new_versions, 1)
+          dbp.write_text(db)
+
+          rp = Path('server/entityRouters.ts')
+          r = rp.read_text()
+
+          helper_anchor = '''async function requirePaymentInWorkspace(paymentId: number, workspaceId: number) {
+            const payment = await getPaymentById(paymentId, workspaceId);
+            if (!payment) throw new Error("Payment not found");
+            return payment;
+          }
+          '''
+          helpers = '''
+          async function requireFileInWorkspace(fileId: number, workspaceId: number) {
+            const file = await getFileById(fileId, workspaceId);
+            if (!file) throw new Error("File not found");
+            return file;
+          }
+
+          async function requireContactInWorkspace(contactId: number, workspaceId: number) {
+            const contact = await getContactById(contactId, workspaceId);
+            if (!contact) throw new Error("Contact not found");
+            return contact;
+          }
+          '''
+          if helper_anchor not in r:
+            raise SystemExit('router helper anchor not found')
+          r = r.replace(helper_anchor, helper_anchor + helpers, 1)
+
+          old_contact_router = '''export const contactLinksRouter = router({
+            list: protectedProcedure
+              .input(z.object({ linkedRecordType: z.string(), linkedRecordId: z.number() }))
+              .query(async ({ input }) => {
+                return getContactLinksForRecord(input.linkedRecordType, input.linkedRecordId);
+              }),
+            create: protectedProcedure
+              .input(z.object({ contactId: z.number(), linkedRecordType: z.string(), linkedRecordId: z.number(), role: z.string().optional() }))
+              .mutation(async ({ input, ctx }) => {
+                const wsId = await requireWrite(ctx);
+                try { await logAudit(wsId, ctx.user.id, "create", "contactLinks", 0, input); } catch {}
+                return createContactLink(input);
+              }),
+          });'''
+          new_contact_router = '''export const contactLinksRouter = router({
+            list: protectedProcedure
+              .input(z.object({ linkedRecordType: z.string(), linkedRecordId: z.number() }))
+              .query(async ({ ctx, input }) => {
+                const wsId = await getWorkspaceId(ctx);
+                return getContactLinksForRecord(wsId, input.linkedRecordType, input.linkedRecordId);
+              }),
+            create: protectedProcedure
+              .input(z.object({ contactId: z.number(), linkedRecordType: z.string(), linkedRecordId: z.number(), role: z.string().optional() }))
+              .mutation(async ({ input, ctx }) => {
+                const wsId = await requireWrite(ctx);
+                await requireContactInWorkspace(input.contactId, wsId);
+                try { await logAudit(wsId, ctx.user.id, "create", "contactLinks", 0, input); } catch {}
+                return createContactLink({ workspaceId: wsId, contactId: input.contactId, recordType: input.linkedRecordType, recordId: input.linkedRecordId, role: input.role });
+              }),
+          });'''
+          if old_contact_router not in r:
+            raise SystemExit('contactLinksRouter target not found')
+          r = r.replace(old_contact_router, new_contact_router, 1)
+
+          old_file_list = '''  list: protectedProcedure
+              .input(z.object({ fileId: z.number() }))
+              .query(async ({ input }) => {
+                return listFileVersions(input.fileId);
+              }),'''
+          new_file_list = '''  list: protectedProcedure
+              .input(z.object({ fileId: z.number() }))
+              .query(async ({ ctx, input }) => {
+                const wsId = await getWorkspaceId(ctx);
+                await requireFileInWorkspace(input.fileId, wsId);
+                return listFileVersions(input.fileId, wsId);
+              }),'''
+          if old_file_list not in r:
+            raise SystemExit('fileVersions list target not found')
+          r = r.replace(old_file_list, new_file_list, 1)
+
+          old_file_create_line = '      const wsId = await requireWrite(ctx);\n      try { await logAudit(wsId, ctx.user.id, "create", "fileVersions", 0, input); } catch {}\n      return createFileVersion({ ...input, workspaceId: wsId, uploadedBy: ctx.user.id });'
+          new_file_create_line = '      const wsId = await requireWrite(ctx);\n      await requireFileInWorkspace(input.fileId, wsId);\n      try { await logAudit(wsId, ctx.user.id, "create", "fileVersions", 0, input); } catch {}\n      return createFileVersion({ ...input, workspaceId: wsId, uploadedBy: ctx.user.id });'
+          if old_file_create_line not in r:
+            raise SystemExit('fileVersions create target not found')
+          r = r.replace(old_file_create_line, new_file_create_line, 1)
+          rp.write_text(r)
+          PY
+
+      - name: Add child-record isolation regression tests
+        run: |
+          cat > server/childRecordWorkspaceIsolation.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+          import { readFileSync } from "node:fs";
+          import { fileURLToPath } from "node:url";
+          import { dirname, join } from "node:path";
+          const here = dirname(fileURLToPath(import.meta.url));
+          const routers = readFileSync(join(here, "entityRouters.ts"), "utf8");
+          const db = readFileSync(join(here, "entityDb.ts"), "utf8");
+
+          describe("child record workspace isolation", () => {
+            it("scopes contact-link queries and writes to the active workspace", () => {
+              expect(db).toContain("getContactLinksForRecord(workspaceId: number, recordType: string, recordId: number)");
+              expect(db).toContain("eq(contactLinks.workspaceId, workspaceId)");
+              expect(routers).toContain("getContactLinksForRecord(wsId, input.linkedRecordType, input.linkedRecordId)");
+              expect(routers).toContain("await requireContactInWorkspace(input.contactId, wsId)");
+              expect(routers).toContain("workspaceId: wsId, contactId: input.contactId, recordType: input.linkedRecordType, recordId: input.linkedRecordId");
+            });
+
+            it("scopes file-version reads and validates the parent file", () => {
+              expect(db).toContain("listFileVersions(fileId: number, workspaceId: number)");
+              expect(db).toContain("eq(fileVersions.workspaceId, workspaceId)");
+              expect(routers).toContain("await requireFileInWorkspace(input.fileId, wsId)");
+              expect(routers).toContain("listFileVersions(input.fileId, wsId)");
+            });
+          });
+          EOF
+
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified batch
+        run: |
+          rm -f .github/workflows/phase1-child-record-scope-hardening.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(security): scope contact links and file versions by workspace'
+          git push origin HEAD:agent/v2-modernization-phase1
