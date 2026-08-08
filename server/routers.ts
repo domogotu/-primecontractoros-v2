@@ -513,7 +513,7 @@ export const appRouter = router({
           files: z.boolean().default(true),
           notes: z.boolean().default(true),
           tasks: z.boolean().default(false),
-          deliverables: z.boolean().default(false),
+          deliverables: z.boolean().default(true),
         }).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
@@ -533,7 +533,7 @@ export const appRouter = router({
           });
           const contractId = typeof contractResult === "number" ? contractResult : Number((contractResult as any)?.[0]?.insertId ?? (contractResult as any)?.insertId);
           if (!contractId) throw new Error("Contract creation did not return an insert id");
-          const cf = input.carryForward || { contacts: true, files: true, notes: true, tasks: false, deliverables: false };
+          const cf = input.carryForward || { contacts: true, files: true, notes: true, tasks: false, deliverables: true };
           if (cf.contacts) {
             const linked = await db.select().from(contactsTbl).where(andOp(eqOp(contactsTbl.workspaceId, wsId), eqOp(contactsTbl.linkedRecordType, "proposal"), eqOp(contactsTbl.linkedRecordId, input.proposalId)));
             for (const c of linked) {
@@ -558,10 +558,21 @@ export const appRouter = router({
               await db.insert(tasksTbl).values({ workspaceId: wsId, title: t.title, description: t.description, assignedTo: t.assignedTo, linkedRecordType: "contract", linkedRecordId: contractId, priority: t.priority, dueDate: t.dueDate });
             }
           }
+          if (cf.deliverables) {
+            await db.insert(tasksTbl).values({
+              workspaceId: wsId,
+              title: "Establish contract deliverables from governing award",
+              description: "Review the awarded contract, proposal requirements, amendments, and acceptance terms. Create contract deliverable records only after confirming the governing award requirements; proposal records are not treated as contract deliverables automatically.",
+              linkedRecordType: "contract",
+              linkedRecordId: contractId,
+              priority: "high",
+              status: "todo",
+            });
+          }
           await updateProposalStatus(input.proposalId, wsId, "won");
           try { await logAudit(wsId, ctx.user.id, "update", "proposals", 0, input); } catch {}
           dispatchWebhookEvent(wsId, "opportunity.converted", { proposalId: input.proposalId, contractId }).catch(() => {});
-          return { success: true, contractId: contractId };
+          return { success: true, contractId, deliverablesPendingAwardReview: cf.deliverables };
         } catch (error) {
           console.error("Error converting proposal to contract:", error);
           throw error;
