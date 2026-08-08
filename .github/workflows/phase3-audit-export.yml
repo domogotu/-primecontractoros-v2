@@ -1,0 +1,80 @@
+name: Phase 3 audit log export
+
+on:
+  push:
+    branches: [agent/phase3-audit-export]
+    paths: [.github/workflows/phase3-audit-export.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase3-validation-only-not-a-secret
+      VITE_APP_ID: phase3-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase3-owner
+      OWNER_NAME: Phase3 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase3-validation
+      SAM_GOV_API_KEY: phase3-test
+      STRIPE_SECRET_KEY: sk_test_phase3_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase3_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase3-validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/phase3-audit-export
+          fetch-depth: 0
+      - name: Implement real CSV export and remove TypeScript suppression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('client/src/pages/AuditLog.tsx')
+          s=p.read_text()
+          s=s.replace('// @ts-nocheck\n','',1)
+          old='''  const handleExport = () => {\n    toast({\n      title: "Export Started",\n      description: "Audit log export is being generated. You will be notified when it's ready.",\n    });\n  };'''
+          new='''  const handleExport = () => {\n    if (filteredLogs.length === 0) {\n      toast({ title: "Nothing to export", description: "No audit records match the current filters." });\n      return;\n    }\n    const escapeCsv = (value: unknown) => {\n      const text = value == null ? "" : typeof value === "string" ? value : JSON.stringify(value);\n      return `"${text.replace(/"/g, '""')}"`;\n    };\n    const rows = filteredLogs.map((log: any) => [\n      log.id,\n      log.timestamp,\n      log.userId,\n      log.userEmail,\n      log.action,\n      log.entity,\n      log.entityId,\n      log.ip,\n      log.changes,\n      log.before,\n      log.after,\n    ]);\n    const csv = [\n      ["Event ID", "Timestamp", "User ID", "User Email", "Action", "Record Type", "Record ID", "IP Address", "Changes", "Before", "After"],\n      ...rows,\n    ].map(row => row.map(escapeCsv).join(",")).join("\\n");\n    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });\n    const url = URL.createObjectURL(blob);\n    const link = document.createElement("a");\n    link.href = url;\n    link.download = `primecontractoros-audit-log-${new Date().toISOString().slice(0, 10)}.csv`;\n    document.body.appendChild(link);\n    link.click();\n    link.remove();\n    URL.revokeObjectURL(url);\n    toast({ title: "Export complete", description: `${filteredLogs.length} audit records exported as CSV.` });\n  };'''
+          if old not in s:
+              raise SystemExit('export placeholder block not found')
+          s=s.replace(old,new)
+          # Remove truly unused location hook/import if TypeScript/lint no longer needs them.
+          s=s.replace('import { useLocation } from "wouter";\n','')
+          s=s.replace('  const [, setLocation] = useLocation();\n','')
+          p.write_text(s)
+          PY
+      - name: Verify fake export behavior is gone
+        run: |
+          ! grep -n 'Export Started\|being generated' client/src/pages/AuditLog.tsx
+          grep -n 'text/csv\|createObjectURL\|link.download' client/src/pages/AuditLog.tsx
+          ! head -n 1 client/src/pages/AuditLog.tsx | grep '@ts-nocheck'
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified audit export
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add client/src/pages/AuditLog.tsx
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix(phase3): make audit log export real and type-safe'
+            git push origin HEAD:agent/phase3-audit-export
+          fi
