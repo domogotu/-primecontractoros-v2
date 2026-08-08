@@ -1,7 +1,7 @@
 # PrimeContractorOS V2 - Authoritative Requirements Register
 
 Status: Active control document  
-Owner: Reed's Solutions LLC  
+Owner: Reeds Solutions LLC  
 Development repository: `domogotu/-primecontractoros-v2`  
 Protected production reference: `domogotu/primecontractoros`
 
@@ -33,7 +33,7 @@ No document may prove that a feature works. A feature is complete only after cur
 
 ## 3. Product identity and system layers
 
-PrimeContractorOS is a workspace-based government-contracting operating system owned by Reed's Solutions LLC. It serves prime contractors, subcontractors, and teams across:
+PrimeContractorOS is a workspace-based government-contracting operating system owned by Reeds Solutions LLC. It serves prime contractors, subcontractors, and teams across:
 
 `Opportunity -> Proposal -> Awarded Contract -> Active Operations -> Finance -> Closeout -> Lessons Learned`
 
@@ -114,7 +114,7 @@ Files, contacts, messages, tasks, and alerts link to their correct lifecycle rec
 
 Contract finance and PrimeContractorOS subscription billing are separate domains. Invoices and payments are separate records with explicit allocation/linking. Proper-invoice support is contract/clause-driven and review-first. Closeout remains blocked by unresolved final invoice, payment, evidence, property, modification, or acceptance items as applicable.
 
-Subscription payments route to the platform owner, Reed's Solutions LLC, through configured platform billing.
+Subscription payments route to the platform owner, Reeds Solutions LLC, through configured platform billing.
 
 ## 10. Platform-owner controls
 
