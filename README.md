@@ -9,11 +9,9 @@ PrimeContractorOS is the government-contracting operating system owned by **Reed
 
 ## Current repository status
 
-This V2 repository is **not yet a complete runnable mirror of production**.
+V2 now contains the complete mirrored PrimeContractorOS application baseline from `domogotu/primecontractoros`, reconciled with V2-only governance files and the V2 files that had already been modernized before the mirror.
 
-At the current control checkpoint, the repository contains V2 documentation, the separate `unified-ai-ecosystem/` workstream, and only a limited subset of PrimeContractorOS application source. Do not treat filenames, historical reports, screenshots, or this README as proof that the full application currently builds or that a listed feature is implemented.
-
-Before feature remediation begins, the complete production application tree must be mirrored safely into V2, reconciled with V2-only files, and validated with install, typecheck, lint, test, build, migration, security, route, API, schema, and integration inventories.
+The mirror baseline has been verified with dependency installation, an ephemeral MySQL migration run, TypeScript checking, the repository test suite, and a production build. Modernization is active on controlled V2 branches. Historical reports, screenshots, and old audit notes remain useful evidence, but each reported defect must be verified against current source before it is treated as open.
 
 ## Repository safety rules
 
@@ -33,14 +31,14 @@ Before changing PrimeContractorOS, read:
 3. `docs/SOURCE_RECONCILIATION.md`
 4. `docs/V2_EXECUTION_BACKLOG.md`
 5. `docs/ACCEPTANCE_TRACEABILITY_MATRIX.md`
-6. `docs/MASTER_SPECIFICATION.md` when present and reconciled
+6. `docs/MASTER_SPECIFICATION.md`
 7. `MIGRATION_REGISTER.md`
 
 These documents define repository boundaries, intended behavior, evidence rules, execution gates, and acceptance criteria.
 
-## PrimeContractorOS target architecture
+## Current verified toolchain
 
-The production/reference application has historically used a TypeScript stack centered on React, Express, tRPC, Drizzle ORM, MySQL/TiDB-compatible persistence, Vite, and Vitest. The exact V2 toolchain, versions, scripts, dependencies, routes, schema, integrations, and environment requirements must be regenerated from the complete mirrored codebase before they are treated as current V2 facts.
+The mirrored application is a TypeScript system centered on React, Express, tRPC, Drizzle ORM, MySQL/TiDB-compatible persistence, Vite, pnpm, and Vitest. The baseline validation runs against an ephemeral MySQL service so database-dependent tests can execute without using production data or credentials.
 
 ## Lifecycle target
 
@@ -50,25 +48,20 @@ Core requirements include workspace isolation, role enforcement, real persistenc
 
 ## Development checkpoint
 
-The immediate PrimeContractorOS objective is:
+Completed baseline gates:
 
-1. Secure the V2 repository.
-2. Complete a safe full-tree production-to-V2 mirror.
-3. Reconcile V2-only and already-modernized files intentionally.
-4. Produce a baseline build and architecture report.
-5. Verify security and tenancy.
-6. Repair schema/API/UI contracts.
-7. Complete routes, pages, actions, lifecycle, finance, AI, legal/operations, and release gates in order.
+1. Full-tree production-to-V2 mirror completed without modifying production.
+2. V2-only governance and already-modernized files reconciled intentionally.
+3. Dependency installation, ephemeral MySQL migrations, TypeScript checking, the full baseline test suite, and production build verified.
+4. Security and tenancy modernization has started. Invoice/payment child records, contact links, and file versions have already been hardened against cross-workspace access and now have regression coverage.
+
+Current objective: continue security and tenancy verification, then repair remaining schema/API/UI contracts and complete routes, pages, actions, lifecycle, finance, AI, legal/operations, and release gates in controlled, tested batches.
 
 See `docs/V2_EXECUTION_BACKLOG.md` for the controlled execution sequence.
 
 ## Separate Unified AI Ecosystem workstream
 
 `unified-ai-ecosystem/` is a separate project. Its specifications, build status, workflow exports, and phase gates must not be interpreted as PrimeContractorOS application requirements unless explicitly approved as a cross-project integration.
-
-## Visibility
-
-The repository should be treated as proprietary development material. If GitHub reports the repository as public, changing repository visibility to **Private** is a repository-administration action that must be completed before sensitive or complete application source is mirrored into V2.
 
 ## License
 
