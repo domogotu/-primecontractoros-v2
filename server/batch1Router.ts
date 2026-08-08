@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "./_core/trpc";
 import { getDb } from "./db";
-import { onboardingProgress, recordNotes, recordTimeline } from "../drizzle/schema";
+import { onboardingProgress, recordNotes, recordTimeline, helpArticles } from "../drizzle/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { logAudit } from "./featureRouter";
 import { requireWorkspaceId } from "./workspaceMiddleware";
@@ -67,6 +67,43 @@ export const recordTimelineRouter = router({
 });
 
 export const helpRouter = router({
-  getContent: protectedProcedure.input(z.object({ contextKey: z.string() })).query(async ({ input }) => ({ title: "Help", content: "Help content for: " + input.contextKey, contextKey: input.contextKey })),
-  list: protectedProcedure.query(async () => [{ id: 1, title: "Getting Started", contextKey: "getting-started", content: "Welcome to PrimeContractorOS" }]),
+  getContent: protectedProcedure
+    .input(z.object({ contextKey: z.string() }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+      const [article] = await db
+        .select()
+        .from(helpArticles)
+        .where(and(eq(helpArticles.slug, input.contextKey), eq(helpArticles.isPublished, true)))
+        .limit(1);
+      if (!article) return null;
+      return {
+        id: article.id,
+        title: article.title,
+        content: article.body,
+        contextKey: article.slug,
+        category: article.category,
+        relatedGlossaryTerms: article.relatedGlossaryTerms,
+        updatedAt: article.updatedAt,
+      };
+    }),
+  list: protectedProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+    const articles = await db
+      .select()
+      .from(helpArticles)
+      .where(eq(helpArticles.isPublished, true))
+      .orderBy(helpArticles.title);
+    return articles.map((article) => ({
+      id: article.id,
+      title: article.title,
+      contextKey: article.slug,
+      content: article.body,
+      category: article.category,
+      relatedGlossaryTerms: article.relatedGlossaryTerms,
+      updatedAt: article.updatedAt,
+    }));
+  }),
 });
