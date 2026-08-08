@@ -1,0 +1,210 @@
+name: Phase 1 invoice scope hardening
+
+on:
+  push:
+    branches:
+      - agent/v2-modernization-phase1
+    paths:
+      - .github/workflows/phase1-invoice-scope-hardening.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase1-validation-only-not-a-secret
+      VITE_APP_ID: phase1-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase1-owner
+      OWNER_NAME: Phase1 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase1-validation
+      SAM_GOV_API_KEY: phase1-test
+      STRIPE_SECRET_KEY: sk_test_phase1_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase1_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase1_validation
+    steps:
+      - name: Checkout modernization branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/v2-modernization-phase1
+          fetch-depth: 0
+
+      - name: Harden invoice child-record workspace isolation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server/entityRouters.ts')
+          s = p.read_text()
+
+          anchor = '''async function requireFinanceDelete(ctx: any): Promise<number> {
+            if (!ctx.user?.id) throw new Error("Not authenticated");
+            const { wsId } = await enforceAction(ctx.user.id, "manage_invoices");
+            return wsId;
+          }
+          '''
+          replacement = anchor + '''
+          async function requireInvoiceInWorkspace(invoiceId: number, workspaceId: number) {
+            const invoice = await getInvoiceById(invoiceId, workspaceId);
+            if (!invoice) throw new Error("Invoice not found");
+            return invoice;
+          }
+
+          async function requirePaymentInWorkspace(paymentId: number, workspaceId: number) {
+            const payment = await getPaymentById(paymentId, workspaceId);
+            if (!payment) throw new Error("Payment not found");
+            return payment;
+          }
+          '''
+          if anchor not in s:
+            raise SystemExit('finance helper anchor not found')
+          s = s.replace(anchor, replacement, 1)
+
+          old = '''  updateStatus: protectedProcedure
+            .input(z.object({ id: z.number(), oldStatus: z.string(), newStatus: z.string(), notes: z.string().optional() }))
+            .mutation(async ({ ctx, input }) => {
+              const wsId = await requireFinanceWrite(ctx);
+              await updateInvoice(input.id, wsId, { status: input.newStatus } as any);
+              await addInvoiceStatusHistory({ invoiceId: input.id, oldStatus: input.oldStatus, newStatus: input.newStatus, changedBy: ctx.user.id, notes: input.notes });
+              try { await logAudit(wsId, ctx.user.id, "delete", "invoices", input.id, null); } catch {}
+              return { success: true };
+            }),
+          statusHistory: protectedProcedure
+            .input(z.object({ invoiceId: z.number() }))
+            .query(async ({ input }) => {
+              return getInvoiceStatusHistory(input.invoiceId);
+            }),
+          paymentLinks: protectedProcedure
+            .input(z.object({ invoiceId: z.number() }))
+            .query(async ({ input }) => {
+              return getPaymentLinksForInvoice(input.invoiceId);
+            }),
+          linkPayment: protectedProcedure
+            .input(z.object({ invoiceId: z.number(), paymentId: z.number(), amount: z.string() }))
+            .mutation(async ({ input, ctx }) => {
+              const wsId = await requireWrite(ctx);
+              try { await logAudit(wsId, ctx.user.id, "create", "invoicePaymentLink", 0, input); } catch {}
+              return linkPaymentToInvoice(input);
+            }),
+          '''
+          new = '''  updateStatus: protectedProcedure
+            .input(z.object({ id: z.number(), oldStatus: z.string(), newStatus: z.string(), notes: z.string().optional() }))
+            .mutation(async ({ ctx, input }) => {
+              const wsId = await requireFinanceWrite(ctx);
+              await requireInvoiceInWorkspace(input.id, wsId);
+              await updateInvoice(input.id, wsId, { status: input.newStatus } as any);
+              await addInvoiceStatusHistory({ invoiceId: input.id, oldStatus: input.oldStatus, newStatus: input.newStatus, changedBy: ctx.user.id, notes: input.notes });
+              try { await logAudit(wsId, ctx.user.id, "update", "invoices", input.id, { oldStatus: input.oldStatus, newStatus: input.newStatus, notes: input.notes }); } catch {}
+              return { success: true };
+            }),
+          statusHistory: protectedProcedure
+            .input(z.object({ invoiceId: z.number() }))
+            .query(async ({ ctx, input }) => {
+              const wsId = await getWorkspaceId(ctx);
+              await requireInvoiceInWorkspace(input.invoiceId, wsId);
+              return getInvoiceStatusHistory(input.invoiceId);
+            }),
+          paymentLinks: protectedProcedure
+            .input(z.object({ invoiceId: z.number() }))
+            .query(async ({ ctx, input }) => {
+              const wsId = await getWorkspaceId(ctx);
+              await requireInvoiceInWorkspace(input.invoiceId, wsId);
+              return getPaymentLinksForInvoice(input.invoiceId);
+            }),
+          linkPayment: protectedProcedure
+            .input(z.object({ invoiceId: z.number(), paymentId: z.number(), amount: z.string() }))
+            .mutation(async ({ input, ctx }) => {
+              const wsId = await requireFinanceWrite(ctx);
+              await requireInvoiceInWorkspace(input.invoiceId, wsId);
+              await requirePaymentInWorkspace(input.paymentId, wsId);
+              try { await logAudit(wsId, ctx.user.id, "create", "invoicePaymentLink", 0, input); } catch {}
+              return linkPaymentToInvoice(input);
+            }),
+          '''
+          if old not in s:
+            raise SystemExit('invoice router target block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+      - name: Add regression test
+        shell: bash
+        run: |
+          cat > server/invoiceWorkspaceIsolation.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+          import { readFileSync } from "node:fs";
+          import { fileURLToPath } from "node:url";
+          import { dirname, join } from "node:path";
+
+          const here = dirname(fileURLToPath(import.meta.url));
+          const source = readFileSync(join(here, "entityRouters.ts"), "utf8");
+
+          describe("invoice workspace isolation regressions", () => {
+            it("requires invoice ownership before status history, payment-link reads, and status mutation", () => {
+              expect(source).toContain("await requireInvoiceInWorkspace(input.id, wsId);");
+              expect(source).toContain("await requireInvoiceInWorkspace(input.invoiceId, wsId);");
+            });
+
+            it("requires both invoice and payment ownership before linking a payment", () => {
+              const linkBlock = source.slice(source.indexOf("linkPayment: protectedProcedure"), source.indexOf("// Line Items"));
+              expect(linkBlock).toContain("const wsId = await requireFinanceWrite(ctx);");
+              expect(linkBlock).toContain("await requireInvoiceInWorkspace(input.invoiceId, wsId);");
+              expect(linkBlock).toContain("await requirePaymentInWorkspace(input.paymentId, wsId);");
+            });
+
+            it("records invoice status changes as updates rather than deletes", () => {
+              const statusBlock = source.slice(source.indexOf("updateStatus: protectedProcedure"), source.indexOf("statusHistory: protectedProcedure"));
+              expect(statusBlock).toContain('logAudit(wsId, ctx.user.id, "update", "invoices"');
+              expect(statusBlock).not.toContain('logAudit(wsId, ctx.user.id, "delete", "invoices"');
+            });
+          });
+          EOF
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply existing migrations to ephemeral MySQL
+        run: pnpm drizzle-kit migrate
+
+      - name: Validate
+        shell: bash
+        run: |
+          pnpm check
+          env -u RESEND_API_KEY pnpm test
+          pnpm build
+
+      - name: Commit verified hardening
+        shell: bash
+        run: |
+          rm -f .github/workflows/phase1-invoice-scope-hardening.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(finance): enforce invoice payment workspace isolation'
+          git push origin HEAD:agent/v2-modernization-phase1
