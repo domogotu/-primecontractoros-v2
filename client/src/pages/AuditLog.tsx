@@ -1,6 +1,4 @@
-// @ts-nocheck
 import React, { useState } from "react";
-import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import PageLayout from "@/components/PageLayout";
@@ -36,7 +34,6 @@ import {
 export default function AuditLog() {
   const { toast } = useToast();
   const { user } = useAuth();
-  const [, setLocation] = useLocation();
   
   const [searchQuery, setSearchQuery] = useState("");
   const [actionFilter, setActionFilter] = useState("ALL");
@@ -55,10 +52,27 @@ export default function AuditLog() {
   };
 
   const handleExport = () => {
-    toast({
-      title: "Export Started",
-      description: "Audit log export is being generated. You will be notified when it's ready.",
-    });
+    if (filteredLogs.length === 0) {
+      toast({ title: "Nothing to export", description: "No audit records match the current filters." });
+      return;
+    }
+    const escapeCsv = (value: unknown) => {
+      const text = value == null ? "" : typeof value === "string" ? value : JSON.stringify(value);
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const rows = filteredLogs.map((log) => [log.id, log.timestamp, log.userId, log.action, log.entity, log.entityId, log.changes]);
+    const csv = [["Event ID", "Timestamp", "User ID", "Action", "Record Type", "Record ID", "Changes"], ...rows]
+      .map(row => row.map(escapeCsv).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `primecontractoros-audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast({ title: "Export complete", description: `${filteredLogs.length} audit records exported as CSV.` });
   };
 
   const getActionColor = (action: string) => {
@@ -268,33 +282,14 @@ export default function AuditLog() {
                                 <span className="text-muted-foreground">Event ID:</span>
                                 <span className="col-span-2 font-mono text-foreground">{log.id}</span>
                               </div>
-                              <div className="grid grid-cols-3 gap-2">
-                                <span className="text-muted-foreground">IP Address:</span>
-                                <span className="col-span-2 font-mono text-foreground">{log.ip}</span>
-                              </div>
-                              <div className="grid grid-cols-3 gap-2">
-                                <span className="text-muted-foreground">User Email:</span>
-                                <span className="col-span-2 text-foreground">{log.userEmail}</span>
-                              </div>
                             </div>
                           </div>
                           
                           <div>
-                            <h4 className="text-sm font-medium text-foreground mb-2">Data Changes</h4>
-                            <div className="grid grid-cols-2 gap-4">
-                              <div className="bg-background border border-border rounded p-3">
-                                <div className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">Before</div>
-                                <pre className="text-xs text-red-400 overflow-x-auto">
-                                  {log.before ? JSON.stringify(log.before, null, 2) : "null"}
-                                </pre>
-                              </div>
-                              <div className="bg-background border border-border rounded p-3">
-                                <div className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">After</div>
-                                <pre className="text-xs text-green-400 overflow-x-auto">
-                                  {log.after ? JSON.stringify(log.after, null, 2) : "null"}
-                                </pre>
-                              </div>
-                            </div>
+                            <h4 className="text-sm font-medium text-foreground mb-2">Recorded Changes</h4>
+                            <pre className="text-xs text-foreground overflow-x-auto bg-background border border-border rounded p-3">
+                              {log.changes || "No change payload recorded."}
+                            </pre>
                           </div>
                         </div>
                       )}
