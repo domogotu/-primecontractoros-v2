@@ -1,0 +1,233 @@
+name: Phase 1 system infrastructure tenancy v2
+
+on:
+  push:
+    branches:
+      - agent/v2-modernization-phase1
+    paths:
+      - .github/workflows/phase1-system-infra-tenancy-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+          MYSQL_USER: user
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase1-validation-only-not-a-secret
+      VITE_APP_ID: phase1-validation
+      OAUTH_SERVER_URL: https://example.invalid
+      VITE_OAUTH_PORTAL_URL: https://example.invalid
+      OWNER_OPEN_ID: phase1-owner
+      OWNER_NAME: Phase1 Owner
+      OPENAI_API_KEY: sk-test-dummy-phase1-validation
+      SAM_GOV_API_KEY: phase1-test
+      STRIPE_SECRET_KEY: sk_test_phase1_validation
+      STRIPE_PUBLISHABLE_KEY: pk_test_phase1_validation
+      STRIPE_WEBHOOK_SECRET: whsec_phase1_validation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v2-modernization-phase1
+          fetch-depth: 0
+
+      - name: Patch system infrastructure tenancy checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('server/systemInfraRouter.ts')
+          s = p.read_text()
+
+          if 'import { TRPCError } from "@trpc/server";' not in s:
+            s = s.replace(
+              'import { router, protectedProcedure } from "./_core/trpc";',
+              'import { router, protectedProcedure } from "./_core/trpc";\nimport { TRPCError } from "@trpc/server";\nimport { requireWorkspaceId } from "./workspaceMiddleware";',
+              1,
+            )
+
+          helper_anchor = 'export const systemInfraRouter = router({'
+          helper = '''async function requireActiveWorkspace(ctx: any, requestedWorkspaceId?: number): Promise<number> {
+            if (!ctx.user?.id) throw new TRPCError({ code: "UNAUTHORIZED" });
+            const workspaceId = await requireWorkspaceId(ctx.user.id);
+            if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== workspaceId) {
+              throw new TRPCError({ code: "FORBIDDEN", message: "Workspace access denied" });
+            }
+            return workspaceId;
+          }
+
+          async function requireSupportTicketInWorkspace(ticketId: number, workspaceId: number) {
+            const db = await getDb();
+            if (!db) throw new Error("Database not available");
+            const [ticket] = await db.select().from(supportTickets)
+              .where(and(eq(supportTickets.id, ticketId), eq(supportTickets.workspaceId, workspaceId)))
+              .limit(1);
+            if (!ticket) throw new TRPCError({ code: "NOT_FOUND", message: "Support ticket not found" });
+            return ticket;
+          }
+
+          '''
+          if 'async function requireActiveWorkspace' not in s:
+            if helper_anchor not in s:
+              raise SystemExit('router anchor missing')
+            s = s.replace(helper_anchor, helper + helper_anchor, 1)
+
+          # Make ctx available to every callback. Extra ctx variables are harmless and allow centralized checks.
+          s = s.replace('.query(async ({ input }) => {', '.query(async ({ ctx, input }) => {')
+          s = s.replace('.mutation(async ({ input }) => {', '.mutation(async ({ ctx, input }) => {')
+
+          # For every callback whose input schema contains a required workspaceId, inject an active-workspace assertion.
+          lines = s.splitlines()
+          output = []
+          for i, line in enumerate(lines):
+            output.append(line)
+            if '.query(async ({ ctx, input }) => {' in line or '.mutation(async ({ ctx, input }) => {' in line:
+              prior = '\n'.join(lines[max(0, i-18):i])
+              following = '\n'.join(lines[i+1:i+8])
+              if 'workspaceId: z.number()' in prior and 'requireActiveWorkspace(ctx, input.workspaceId)' not in following:
+                indent = line[:len(line)-len(line.lstrip())] + '  '
+                output.append(indent + 'await requireActiveWorkspace(ctx, input.workspaceId);')
+          s = '\n'.join(output) + '\n'
+
+          # Notifications that take only an ID must scope the mutation by active workspace.
+          s = re.sub(
+            r'(markRead: protectedProcedure.*?\.mutation\(async \(\{ ctx, input \}\) => \{\n\s*const db = await getDb\(\);\n\s*if \(!db\) return \{ success: false \};\n)(\s*await db\.update\(notifications\)\.set\(\{ isRead: true \}\)\.where\(eq\(notifications\.id, input\.notificationId\)\);)',
+            r'\1      const wsId = await requireActiveWorkspace(ctx);\n      await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, wsId)));',
+            s, count=1, flags=re.S,
+          )
+          s = re.sub(
+            r'(dismiss: protectedProcedure.*?\.mutation\(async \(\{ ctx, input \}\) => \{\n\s*const db = await getDb\(\);\n\s*if \(!db\) return \{ success: false \};\n)(\s*await db\.update\(notifications\)\.set\(\{ dismissedAt: new Date\(\) \}\)\.where\(eq\(notifications\.id, input\.notificationId\)\);)',
+            r'\1      const wsId = await requireActiveWorkspace(ctx);\n      await db.update(notifications).set({ dismissedAt: new Date() }).where(and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, wsId)));',
+            s, count=1, flags=re.S,
+          )
+
+          # Support list must always include the active workspace, even when the optional workspaceId is omitted.
+          support_old = '''      const conditions: any[] = [];
+              if (input?.workspaceId) conditions.push(eq(supportTickets.workspaceId, input.workspaceId));
+              if (input?.status) conditions.push(eq(supportTickets.status, input.status as any));'''
+          support_new = '''      const wsId = await requireActiveWorkspace(ctx, input?.workspaceId);
+              const conditions: any[] = [eq(supportTickets.workspaceId, wsId)];
+              if (input?.status) conditions.push(eq(supportTickets.status, input.status as any));'''
+          if support_old not in s:
+            raise SystemExit('support list block missing')
+          s = s.replace(support_old, support_new, 1)
+
+          # Support update/note routes have no workspaceId input: validate the ticket through its active-workspace parent.
+          update_marker = 'const updateData: any = { status: input.status };'
+          update_pos = s.rfind(update_marker)
+          if update_pos < 0:
+            raise SystemExit('support update marker missing')
+          before = s[:update_pos]
+          if 'requireSupportTicketInWorkspace(input.id, wsId)' not in before[-500:]:
+            before += ''
+            insertion = '      const wsId = await requireActiveWorkspace(ctx);\n      await requireSupportTicketInWorkspace(input.id, wsId);\n      '
+            s = s[:update_pos] + insertion + s[update_pos:]
+          # Scope the support ticket update itself.
+          support_update = 'await db.update(supportTickets).set(updateData).where(eq(supportTickets.id, input.id));'
+          if support_update in s:
+            s = s.replace(support_update, 'await db.update(supportTickets).set(updateData).where(and(eq(supportTickets.id, input.id), eq(supportTickets.workspaceId, wsId)));', 1)
+
+          note_old = '''      await logAuditEvent({
+                workspaceId: 0,
+                userId: ctx.user.id,
+                actionType: "note",
+                targetType: "support_ticket",
+                targetId: input.ticketId,'''
+          note_new = '''      const wsId = await requireActiveWorkspace(ctx);
+              await requireSupportTicketInWorkspace(input.ticketId, wsId);
+              await logAuditEvent({
+                workspaceId: wsId,
+                userId: ctx.user.id,
+                actionType: "note",
+                targetType: "support_ticket",
+                targetId: input.ticketId,'''
+          if note_old not in s:
+            raise SystemExit('support note block missing')
+          s = s.replace(note_old, note_new, 1)
+
+          # Support create has a required workspaceId, so the injected assertion prevents foreign workspace inserts.
+          # Ensure the stored workspace value cannot diverge from the resolved active workspace.
+          support_create = 'await db.insert(supportTickets).values({\n          ...input,\n          userId: ctx.user.id,\n        });'
+          if support_create in s:
+            s = s.replace(support_create, 'const wsId = await requireActiveWorkspace(ctx, input.workspaceId);\n        await db.insert(supportTickets).values({\n          ...input,\n          workspaceId: wsId,\n          userId: ctx.user.id,\n        });', 1)
+
+          required = [
+            'requireWorkspaceId(ctx.user.id)',
+            'Workspace access denied',
+            'eq(notifications.workspaceId, wsId)',
+            'const conditions: any[] = [eq(supportTickets.workspaceId, wsId)]',
+            'requireSupportTicketInWorkspace(input.ticketId, wsId)',
+          ]
+          for item in required:
+            if item not in s:
+              raise SystemExit('missing invariant: ' + item)
+
+          p.write_text(s)
+          PY
+
+      - name: Add regression tests
+        run: |
+          cat > server/systemInfraTenancy.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+          import { readFileSync } from "node:fs";
+          import { fileURLToPath } from "node:url";
+          import { dirname, join } from "node:path";
+          const here = dirname(fileURLToPath(import.meta.url));
+          const source = readFileSync(join(here, "systemInfraRouter.ts"), "utf8");
+
+          describe("system infrastructure workspace isolation", () => {
+            it("validates caller supplied workspace ids against the active workspace", () => {
+              expect(source).toContain("requireWorkspaceId(ctx.user.id)");
+              expect(source).toContain("Workspace access denied");
+              expect(source.match(/requireActiveWorkspace\(ctx, input\.workspaceId\)/g)?.length || 0).toBeGreaterThan(8);
+            });
+
+            it("scopes notification id mutations to the active workspace", () => {
+              expect(source).toContain("and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, wsId))");
+            });
+
+            it("never lists support tickets without active workspace scope", () => {
+              expect(source).toContain("const conditions: any[] = [eq(supportTickets.workspaceId, wsId)]");
+            });
+
+            it("validates support ticket parent ownership before status and note operations", () => {
+              expect(source).toContain("requireSupportTicketInWorkspace(input.id, wsId)");
+              expect(source).toContain("requireSupportTicketInWorkspace(input.ticketId, wsId)");
+              expect(source.slice(source.indexOf("support: router({")).includes("workspaceId: 0")).toBe(false);
+            });
+          });
+          EOF
+
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified hardening
+        run: |
+          rm -f .github/workflows/phase1-system-infra-tenancy-v2.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(security): enforce workspace isolation in system infrastructure'
+          git push origin HEAD:agent/v2-modernization-phase1
