@@ -81,6 +81,18 @@ async function requirePaymentInWorkspace(paymentId: number, workspaceId: number)
   return payment;
 }
 
+async function requireFileInWorkspace(fileId: number, workspaceId: number) {
+  const file = await getFileById(fileId, workspaceId);
+  if (!file) throw new Error("File not found");
+  return file;
+}
+
+async function requireContactInWorkspace(contactId: number, workspaceId: number) {
+  const contact = await getContactById(contactId, workspaceId);
+  if (!contact) throw new Error("Contact not found");
+  return contact;
+}
+
 export const filesRouter = router({
   list: protectedProcedure
     .input(z.object({ linkedRecordType: z.string().optional(), linkedRecordId: z.number().optional(), isGoverningDocument: z.boolean().optional() }).optional())
@@ -919,15 +931,17 @@ export const contractRequirementsRouter = router({
 export const contactLinksRouter = router({
   list: protectedProcedure
     .input(z.object({ linkedRecordType: z.string(), linkedRecordId: z.number() }))
-    .query(async ({ input }) => {
-      return getContactLinksForRecord(input.linkedRecordType, input.linkedRecordId);
+    .query(async ({ ctx, input }) => {
+      const wsId = await getWorkspaceId(ctx);
+      return getContactLinksForRecord(wsId, input.linkedRecordType, input.linkedRecordId);
     }),
   create: protectedProcedure
     .input(z.object({ contactId: z.number(), linkedRecordType: z.string(), linkedRecordId: z.number(), role: z.string().optional() }))
     .mutation(async ({ input, ctx }) => {
       const wsId = await requireWrite(ctx);
+      await requireContactInWorkspace(input.contactId, wsId);
       try { await logAudit(wsId, ctx.user.id, "create", "contactLinks", 0, input); } catch {}
-      return createContactLink(input);
+      return createContactLink({ workspaceId: wsId, contactId: input.contactId, recordType: input.linkedRecordType, recordId: input.linkedRecordId, role: input.role });
     }),
 });
 
@@ -957,13 +971,16 @@ export const fileVersionsRouter = router({
     }),
   list: protectedProcedure
     .input(z.object({ fileId: z.number() }))
-    .query(async ({ input }) => {
-      return listFileVersions(input.fileId);
+    .query(async ({ ctx, input }) => {
+      const wsId = await getWorkspaceId(ctx);
+      await requireFileInWorkspace(input.fileId, wsId);
+      return listFileVersions(input.fileId, wsId);
     }),
   create: protectedProcedure
     .input(z.object({ fileId: z.number(), versionNumber: z.number(), storageKey: z.string(), storageUrl: z.string(), size: z.number().optional(), mimeType: z.string().optional(), notes: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const wsId = await requireWrite(ctx);
+      await requireFileInWorkspace(input.fileId, wsId);
       try { await logAudit(wsId, ctx.user.id, "create", "fileVersions", 0, input); } catch {}
       return createFileVersion({ ...input, workspaceId: wsId, uploadedBy: ctx.user.id });
     }),
