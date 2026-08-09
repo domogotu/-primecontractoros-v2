@@ -577,7 +577,9 @@ export const billingRouter = router({
           expand: ["subscription"],
         });
 
-        if (session.payment_status === "unpaid" && session.status !== "complete") {
+        // A Stripe redirect alone is not proof of successful activation.
+        // Require a completed Checkout Session and a settled/no-payment-required state.
+        if (session.status !== "complete" || !["paid", "no_payment_required"].includes(session.payment_status)) {
           return { success: false, error: "Payment not completed", status: "pending" as const };
         }
 
@@ -585,9 +587,19 @@ export const billingRouter = router({
         const planIdStr = session.metadata?.planId;
         const planId = planIdStr ? parseInt(planIdStr) : null;
 
-        // Find workspace for this user
-        const [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);
+        // Checkout metadata is the source of truth for the workspace being purchased.
+        // Verify that the authenticated user owns that workspace before activating it.
+        const metadataWorkspaceId = Number(session.metadata?.workspaceId || 0);
+        const [ws] = metadataWorkspaceId
+          ? await db.select().from(workspaces).where(and(eq(workspaces.id, metadataWorkspaceId), eq(workspaces.ownerId, userId))).limit(1)
+          : await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);
         const workspaceId = ws?.id ?? null;
+        if (!workspaceId) {
+          return { success: false, error: "Checkout workspace could not be verified for this account", status: "error" as const };
+        }
+        if (metadataWorkspaceId && metadataWorkspaceId !== workspaceId) {
+          return { success: false, error: "Checkout workspace does not belong to this account", status: "error" as const };
+        }
 
         // Record checkout session
         const [existing] = await db.select().from(checkoutSessions)
@@ -613,11 +625,40 @@ export const billingRouter = router({
             .where(eq(checkoutSessions.stripeSessionId, input.sessionId));
         }
 
-        // Update access state if checkout completed
-        if (session.status === "complete" && workspaceId) {
-          await updateAccessState(workspaceId, "active_paid", "Checkout completed", userId);
-          await logBillingAudit(workspaceId, "checkout_completed", userId, `Plan ${planId} checkout completed via Stripe session ${input.sessionId}`);
+        // Persist the Stripe subscription before granting access so billing and
+        // authorization cannot drift apart. Re-verification is idempotent.
+        const stripeSubscription = typeof session.subscription === "string" ? null : session.subscription;
+        const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+        const stripeCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+        if (!planId || !stripeSubscriptionId) {
+          return { success: false, error: "Stripe subscription metadata is incomplete", status: "error" as const };
         }
+        const [existingSubscription] = await db.select().from(subscriptions)
+          .where(eq(subscriptions.workspaceId, workspaceId)).limit(1);
+        const stripeSubscriptionData = stripeSubscription as any;
+        const subscriptionData = {
+          planId,
+          stripeCustomerId: stripeCustomerId || null,
+          stripeSubscriptionId,
+          status: ((stripeSubscription?.status || "active") === "trialing" ? "trialing" : "active") as "active" | "trialing",
+          currentPeriodStart: stripeSubscriptionData?.current_period_start ? new Date(stripeSubscriptionData.current_period_start * 1000) : null,
+          currentPeriodEnd: stripeSubscriptionData?.current_period_end ? new Date(stripeSubscriptionData.current_period_end * 1000) : null,
+          cancelAtPeriodEnd: stripeSubscription?.cancel_at_period_end || false,
+        };
+        if (existingSubscription) {
+          await db.update(subscriptions).set(subscriptionData).where(eq(subscriptions.id, existingSubscription.id));
+        } else {
+          await db.insert(subscriptions).values({ workspaceId, ...subscriptionData });
+        }
+        await db.update(workspaces).set({ planId }).where(eq(workspaces.id, workspaceId));
+
+        await updateAccessState(
+          workspaceId,
+          subscriptionData.status === "trialing" ? "trial_active" : "active_paid",
+          "Verified Stripe checkout completed",
+          userId
+        );
+        await logBillingAudit(workspaceId, "checkout_completed", userId, `Plan ${planId} checkout completed via Stripe session ${input.sessionId}`);
 
         // Evaluate current access
         const access = workspaceId ? await evaluateAccess(workspaceId, userId) : null;
