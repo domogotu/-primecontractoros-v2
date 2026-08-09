@@ -35,6 +35,14 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+
+  // Render and other production hosts use this endpoint to determine whether
+  // the web process itself is alive. Keep it dependency-free so database or
+  // third-party incidents do not cause a healthy process to be restarted.
+  app.get("/api/health", (_req, res) => {
+    res.status(200).json({ status: "ok" });
+  });
+
   // Security headers
   app.use(secureHeaders);
   // Stripe webhook must be registered BEFORE body parsers (needs raw body)
@@ -69,15 +77,22 @@ async function startServer() {
   }
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  const isProduction = process.env.NODE_ENV === "production";
+  // In production the hosting provider routes traffic to the exact PORT it
+  // assigns. Falling forward to a different port can make the service look
+  // deployed while it is unreachable. The fallback scan remains dev-only.
+  const port = isProduction ? preferredPort : await findAvailablePort(preferredPort);
 
-  if (port !== preferredPort) {
+  if (!isProduction && port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`Server running on port ${port}`);
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(error => {
+  console.error("Failed to start server:", error);
+  process.exitCode = 1;
+});
