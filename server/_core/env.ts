@@ -4,6 +4,7 @@ export const ENV = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
+  ownerEmail: (process.env.OWNER_EMAIL ?? "dominiquereed35@gmail.com").trim().toLowerCase(),
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
@@ -16,6 +17,7 @@ const REQUIRED_PRODUCTION_ENV: Array<[string, string]> = [
   ["JWT_SECRET", ENV.cookieSecret],
   ["VITE_APP_ID", ENV.appId],
   ["OAUTH_SERVER_URL", ENV.oAuthServerUrl],
+  ["OWNER_EMAIL", ENV.ownerEmail],
 ];
 
 export function validateProductionCoreEnv() {
@@ -29,6 +31,10 @@ export function validateProductionCoreEnv() {
     throw new Error(
       `Missing required production environment variables: ${missing.join(", ")}`
     );
+  }
+
+  if (ENV.ownerEmail !== "dominiquereed35@gmail.com") {
+    throw new Error("OWNER_EMAIL must be dominiquereed35@gmail.com in production.");
   }
 
   if (ENV.cookieSecret.length < 32) {
