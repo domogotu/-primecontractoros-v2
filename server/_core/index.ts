@@ -4,6 +4,7 @@ import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
+import { validateProductionCoreEnv } from "./env";
 import { secureHeaders, authRateLimit, apiRateLimit, inputSizeLimit } from "../middleware/security";
 import { registerStorageProxy } from "./storageProxy";
 import { stripeWebhookRouter } from "../stripeWebhook";
@@ -33,6 +34,8 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  validateProductionCoreEnv();
+
   const app = express();
   const server = createServer(app);
 
