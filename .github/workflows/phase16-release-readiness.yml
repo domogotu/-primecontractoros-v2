@@ -36,7 +36,7 @@ jobs:
           grep -q 'dominiquereed35@gmail.com' render.yaml
           grep -q 'VITE_OAUTH_PORTAL_URL' render.yaml
           grep -q 'STRIPE_WEBHOOK_SECRET' render.yaml
-          grep -q 'platformOwnerProcedure' server/routers.ts
+          grep -q 'platformOwnerProcedure' server/platformAdminRouter.ts
           grep -q 'Checkout metadata is the source of truth' server/integrationsRouter.ts
           grep -q 'Stripe subscription before granting access' server/integrationsRouter.ts
           grep -q '/checkout/success' client/src/App.tsx
