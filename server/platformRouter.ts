@@ -1,7 +1,7 @@
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import { getDb } from "./db";
-import { workspaces, plans, discounts, platformBilling, supportTickets, platformOverrides, users, loginEvents, platformNotes, platformAuditLog, workspaceMembers, planVersions, policyVersions, backupExports, platformTasks, platformTaskRuns, billingEvents, discountUsage, consentRecords, auditLogs } from "../drizzle/schema";
+import { workspaces, businessProfiles, plans, discounts, platformBilling, supportTickets, platformOverrides, users, loginEvents, platformNotes, platformAuditLog, workspaceMembers, planVersions, policyVersions, backupExports, platformTasks, platformTaskRuns, billingEvents, discountUsage, consentRecords, auditLogs } from "../drizzle/schema";
 import { eq, desc, and, sql, count } from "drizzle-orm";
 import { sendWelcomeEmail } from "./services/email";
 import { getUserWorkspaceRole, requireWorkspaceId as requireWsId } from "./workspaceMiddleware";
@@ -78,11 +78,30 @@ export const workspaceRouter = router({
       contractingModel: z.string().optional(),
       naicsCodes: z.string().optional(),
       certifications: z.string().optional(),
+      uei: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database not available");
       const userId = ctx.user.id;
+      const syncBusinessProfile = async (workspaceId: number) => {
+        const profileData = {
+          legalName: input.companyName,
+          uei: input.uei?.trim() || null,
+          naicsCodes: input.naicsCodes || null,
+          certifications: input.certifications || null,
+        };
+        const [existingProfile] = await db.select({ id: businessProfiles.id })
+          .from(businessProfiles)
+          .where(eq(businessProfiles.workspaceId, workspaceId))
+          .limit(1);
+        if (existingProfile) {
+          await db.update(businessProfiles).set(profileData)
+            .where(eq(businessProfiles.workspaceId, workspaceId));
+        } else {
+          await db.insert(businessProfiles).values({ workspaceId, ...profileData });
+        }
+      };
       // Find or create workspace
       let [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);
       if (!ws) {
@@ -95,6 +114,7 @@ export const workspaceRouter = router({
           naicsCodes: input.naicsCodes || null,
           certifications: input.certifications || null,
         });
+        await syncBusinessProfile(result[0].insertId);
         return { success: true, workspaceId: result[0].insertId };
       }
       // Update existing workspace
@@ -108,6 +128,7 @@ export const workspaceRouter = router({
           certifications: input.certifications || null,
         })
         .where(eq(workspaces.id, ws.id));
+      await syncBusinessProfile(ws.id);
       return { success: true, workspaceId: ws.id };
     }),
 
