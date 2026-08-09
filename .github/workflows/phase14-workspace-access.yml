@@ -1,0 +1,106 @@
+name: Phase 14 workspace access readiness
+on:
+  push:
+    branches: [agent/phase14-workspace-access-readiness]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: mysql://root:root@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase14-validation-secret-that-is-long-enough
+      VITE_APP_ID: phase14-test-app
+      OAUTH_SERVER_URL: https://api.example.com
+      VITE_OAUTH_PORTAL_URL: https://login.example.com
+      OWNER_EMAIL: dominiquereed35@gmail.com
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Apply workspace/access boundary fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('server/platformRouter.ts')
+          s = p.read_text()
+          s = s.replace(
+            'import { getUserWorkspaceRole, requireWorkspaceId as requireWsId } from "./workspaceMiddleware";',
+            'import { getUserWorkspaceRole, getWorkspaceIdForUser, requireWorkspaceId as requireWsId } from "./workspaceMiddleware";'
+          )
+          old = '''    // Find workspace owned by this user\n    const [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);\n    if (ws) return ws;\n\n    // No workspace yet. Check if this user is a platform admin — admins always get a workspace.\n    const isAdmin = ctx.user.role === "admin";\n\n    if (!isAdmin) {\n      // Check if user has a pending checkout session or valid access state before creating.\n      // We allow workspace creation if:\n      //   a) User is admin (handled above)\n      //   b) User has no workspace AND no access state — this is the very first signup\n      //      (workspace will be created, then access state set by checkout/onboarding)\n      // We do NOT block workspace creation here — the access gating happens in AppShell.\n      // This ensures the workspace exists so checkout can reference it.\n    }\n\n    // Auto-create workspace for new user'''
+          new = '''    // Prefer a workspace owned by this user.\n    const [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);\n    if (ws) return ws;\n\n    // Invited members must resolve to the workspace they joined. Never create a\n    // second personal workspace merely because they are not the workspace owner.\n    const [membership] = await db\n      .select({ workspaceId: workspaceMembers.workspaceId })\n      .from(workspaceMembers)\n      .where(eq(workspaceMembers.userId, userId))\n      .limit(1);\n    if (membership) {\n      const [memberWorkspace] = await db.select().from(workspaces)\n        .where(eq(workspaces.id, membership.workspaceId)).limit(1);\n      if (memberWorkspace) return memberWorkspace;\n    }\n\n    // Auto-create only for a genuinely new user with no owned or joined workspace.'''
+          if old not in s:
+              raise SystemExit('getMyWorkspace target not found')
+          s = s.replace(old, new)
+
+          old = '''    const userId = ctx.user.id;\n    const [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);\n    return { completed: ws?.onboardingCompleted ?? false };'''
+          new = '''    const userId = ctx.user.id;\n    const wsId = await getWorkspaceIdForUser(userId);\n    if (!wsId) return { completed: false };\n    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1);\n    return { completed: ws?.onboardingCompleted ?? false };'''
+          if old not in s:
+              raise SystemExit('onboarding status target not found')
+          s = s.replace(old, new)
+
+          marker = '''      // Find or create workspace\n      let [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);\n      if (!ws) {'''
+          replacement = '''      // Find or create workspace. A user who already belongs to another\n      // workspace is a member, not a new workspace owner, and cannot run owner onboarding.\n      let [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);\n      if (!ws) {\n        const [membership] = await db.select({ workspaceId: workspaceMembers.workspaceId })\n          .from(workspaceMembers).where(eq(workspaceMembers.userId, userId)).limit(1);\n        if (membership) {\n          throw new Error("Workspace members cannot create a second workspace through onboarding.");\n        }'''
+          if marker not in s:
+              raise SystemExit('complete onboarding target not found')
+          s = s.replace(marker, replacement)
+          p.write_text(s)
+
+          p = Path('server/accessGating.ts')
+          s = p.read_text()
+          if 'from "./_core/env"' not in s:
+              s = s.replace('import type { AccessState } from "../drizzle/schema";', 'import type { AccessState } from "../drizzle/schema";\nimport { ENV } from "./_core/env";')
+          s = s.replace(
+            '    // If DB is unavailable, allow through to avoid blocking the app entirely\n    return { allowed: true, status: "admin_bypass", reason: "Database unavailable — access permitted" };',
+            '    // Fail closed: billing/access state cannot be verified without the database.\n    return { allowed: false, status: "no_access", reason: "Access could not be verified because the database is unavailable" };'
+          )
+          old = '''  // 1. Admin/owner bypass — platform admins always get through\n  if (userId) {\n    const [user] = await db\n      .select({ role: users.role })\n      .from(users)\n      .where(eq(users.id, userId))\n      .limit(1);\n    if (user?.role === "admin") {\n      return { allowed: true, status: "admin_bypass", reason: "Platform admin account" };\n    }\n  }'''
+          new = '''  // 1. Platform-owner bypass — reserved exclusively for the canonical owner identity.\n  // Workspace/customer admins do not bypass subscription enforcement.\n  if (userId) {\n    const [user] = await db\n      .select({ email: users.email })\n      .from(users)\n      .where(eq(users.id, userId))\n      .limit(1);\n    if (user?.email?.trim().toLowerCase() === ENV.ownerEmail) {\n      return { allowed: true, status: "admin_bypass", reason: "PrimeContractorOS platform owner" };\n    }\n  }'''
+          if old not in s:
+              raise SystemExit('access bypass target not found')
+          s = s.replace(old, new)
+          p.write_text(s)
+
+          p = Path('server/workspaceMiddleware.ts')
+          s = p.read_text()
+          s = s.replace('  if (!db) return "member";', '  if (!db) {\n    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });\n  }')
+          s = s.replace(
+            '  return "member"; // default for workspace owner who isn\'t in members table',
+            '  throw new TRPCError({ code: "FORBIDDEN", message: "User does not belong to this workspace." });'
+          )
+          p.write_text(s)
+          PY
+      - name: Verify workspace/access assertions
+        run: |
+          grep -q 'Invited members must resolve' server/platformRouter.ts
+          grep -q 'Workspace members cannot create a second workspace' server/platformRouter.ts
+          grep -q 'getWorkspaceIdForUser' server/platformRouter.ts
+          grep -q 'ENV.ownerEmail' server/accessGating.ts
+          ! grep -q 'user?.role === "admin"' server/accessGating.ts
+          grep -q 'database is unavailable' server/accessGating.ts
+          grep -q 'User does not belong to this workspace' server/workspaceMiddleware.ts
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified Phase 14 changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/platformRouter.ts server/accessGating.ts server/workspaceMiddleware.ts
+          git commit -m 'fix(access): harden workspace resolution and owner bypass' || true
+          git push
