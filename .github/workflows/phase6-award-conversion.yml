@@ -6,6 +6,7 @@ on:
       - agent/phase6-award-conversion
     paths:
       - .github/workflows/phase6-award-conversion.yml
+      - scripts/phase6_apply.py
 
 permissions:
   contents: write
@@ -44,8 +45,11 @@ jobs:
         with:
           ref: agent/phase6-award-conversion
           fetch-depth: 0
-      - name: Apply Phase 6 patch
-        run: python scripts/phase6_apply.py
+      - name: Apply Phase 6 patch v2
+        run: |
+          sed -i 's/for (const contactId of contactIds)/for (const contactId of Array.from(contactIds))/g' scripts/phase6_apply.py
+          sed -i 's/for (const fileId of fileIds)/for (const fileId of Array.from(fileIds))/g' scripts/phase6_apply.py
+          python scripts/phase6_apply.py
       - name: Verify Phase 6 source assertions
         run: |
           grep -q 'reusedExisting: !created' server/routers.ts
@@ -54,6 +58,8 @@ jobs:
           grep -q 'sourceType: "proposal"' server/routers.ts
           grep -q 'newStatus: "setup"' server/routers.ts
           grep -q 'existingSetupTask' server/routers.ts
+          grep -q 'Array.from(contactIds)' server/routers.ts
+          grep -q 'Array.from(fileIds)' server/routers.ts
       - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm drizzle-kit migrate
