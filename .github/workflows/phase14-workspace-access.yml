@@ -1,0 +1,10 @@
+name: Phase 14 workspace access readiness
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "Temporary validation workflow intentionally disabled after successful Phase 14 validation."
