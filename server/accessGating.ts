@@ -8,7 +8,7 @@
  *   - Active trial
  *   - Platform-owner-approved grace period
  *   - Platform-owner-approved override
- *   - Internal admin/owner account
+ *   - Internal platform-owner/business accounts
  *
  * This module is the single source of truth for access decisions.
  */
@@ -22,10 +22,13 @@ import {
   platformAuditLog,
   billingEvents,
   users,
+  workspaces,
 } from "../drizzle/schema";
 import { eq, and, desc, or } from "drizzle-orm";
 import type { AccessState } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+
+const INTERNAL_BUSINESS_EMAIL = "reedssolutionsllc@gmail.com";
 
 export type AccessStatus =
   | "active_paid"
@@ -122,9 +125,6 @@ export async function evaluateAccess(
     };
   }
 
-  // Platform-owner bypass — reserved exclusively for the canonical owner identity.
-  // Accept either the locked production email or the configured Manus OpenID so
-  // an OAuth provider that omits email cannot accidentally lock out the owner.
   if (userId) {
     const [user] = await db
       .select({ email: users.email, openId: users.openId })
@@ -132,15 +132,35 @@ export async function evaluateAccess(
       .where(eq(users.id, userId))
       .limit(1);
 
-    const emailMatches = user?.email?.trim().toLowerCase() === ENV.ownerEmail;
-    const openIdMatches = Boolean(ENV.ownerOpenId) && user?.openId === ENV.ownerOpenId;
+    const normalizedEmail = user?.email?.trim().toLowerCase() ?? "";
+    const platformOwnerEmailMatches = normalizedEmail === ENV.ownerEmail;
+    const platformOwnerOpenIdMatches = Boolean(ENV.ownerOpenId) && user?.openId === ENV.ownerOpenId;
 
-    if (emailMatches || openIdMatches) {
+    if (platformOwnerEmailMatches || platformOwnerOpenIdMatches) {
       return {
         allowed: true,
         status: "admin_bypass",
         reason: "PrimeContractorOS platform owner",
       };
+    }
+
+    // Reeds Solutions LLC is the platform owner's internal operating company.
+    // It does not receive global platform-owner permissions, but its own workspace
+    // must remain usable without purchasing a customer subscription from itself.
+    if (normalizedEmail === INTERNAL_BUSINESS_EMAIL) {
+      const [ownedWorkspace] = await db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(and(eq(workspaces.id, workspaceId), eq(workspaces.ownerId, userId)))
+        .limit(1);
+
+      if (ownedWorkspace) {
+        return {
+          allowed: true,
+          status: "admin_bypass",
+          reason: "Reeds Solutions LLC internal business workspace",
+        };
+      }
     }
   }
 
