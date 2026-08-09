@@ -5,6 +5,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { validateProductionCoreEnv } from "./env";
+import { runOneTimeFactoryReset } from "./factoryReset";
 import { logInternalWorkspaceDiagnostic } from "./internalWorkspaceDiagnostic";
 import { secureHeaders, authRateLimit, apiRateLimit, inputSizeLimit } from "../middleware/security";
 import { registerStorageProxy } from "./storageProxy";
@@ -37,10 +38,13 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   validateProductionCoreEnv();
 
-  // Read-only production diagnostic for the two internal accounts. This runs
-  // from the actual Node entrypoint because the existing Render service keeps
-  // its start command in the Render dashboard rather than inheriting updates
-  // from render.yaml after service creation.
+  // One-time, explicitly gated production factory reset. With the reset flag
+  // absent this is a no-op. It is placed before diagnostics so verification
+  // reflects the post-reset database state.
+  await runOneTimeFactoryReset();
+
+  // Temporary read-only diagnostic used to verify that the production reset
+  // actually leaves no legacy internal user/workspace records behind.
   await logInternalWorkspaceDiagnostic();
 
   const app = express();
