@@ -10,25 +10,22 @@ permissions:
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Repair billing access workspace resolution
-        shell: bash
+      - name: Patch access resolver
         run: |
           python - <<'PY'
           from pathlib import Path
-          p = Path('server/integrationsRouter.ts')
+          p = Path("server/integrationsRouter.ts")
           s = p.read_text()
-          old_import = 'import { requireWorkspaceId } from "./workspaceMiddleware";'
-          new_import = 'import { getWorkspaceIdForUser, requireWorkspaceId } from "./workspaceMiddleware";'
-          if old_import not in s:
-              raise SystemExit('workspaceMiddleware import anchor not found')
-          s = s.replace(old_import, new_import, 1)
-
+          s = s.replace(
+              'import { requireWorkspaceId } from "./workspaceMiddleware";',
+              'import { getWorkspaceIdForUser, requireWorkspaceId } from "./workspaceMiddleware";',
+              1,
+          )
           old = '''  getAccessStatus: protectedProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return { allowed: true, status: "admin_bypass" as const };
@@ -41,17 +38,8 @@ jobs:
     const db = await getDb();
     if (!db) return { allowed: true, status: "admin_bypass" as const };
     const userId = ctx.user.id;
-
-    // Resolve access through the same ownership-or-membership logic used by the
-    // rest of the application. Legacy production data can legitimately have a
-    // workspace membership without the current user being the workspaces.ownerId.
-    // The previous owner-only lookup returned `No workspace` before evaluateAccess
-    // could apply the internal-account or platform-owner bypass.
     const workspaceId = await getWorkspaceIdForUser(userId);
     if (!workspaceId) {
-      // For canonical internal accounts, evaluateAccess still needs a workspace
-      // ID. If no mapping exists at all, return an explicit reconciliation reason
-      // rather than pretending a paid subscription is required.
       const normalizedEmail = (ctx.user.email || "").trim().toLowerCase();
       if (["dominiquereed35@gmail.com", "reedssolutionsllc@gmail.com"].includes(normalizedEmail)) {
         return {
@@ -62,26 +50,30 @@ jobs:
       }
       return { allowed: false, status: "no_access" as const, reason: "No workspace" };
     }
-
     return evaluateAccess(workspaceId, userId);
   }),'''
-          if old not in s:
-              raise SystemExit('getAccessStatus anchor not found')
-          s = s.replace(old, new, 1)
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "const workspaceId = await getWorkspaceIdForUser(userId);" not in s:
+              raise SystemExit("getAccessStatus anchor not found")
           p.write_text(s)
           PY
-      - name: Validate targeted change
+      - name: Validate
         run: |
           grep -q 'getWorkspaceIdForUser, requireWorkspaceId' server/integrationsRouter.ts
-          grep -q 'workspace reconciliation required' server/integrationsRouter.ts
+          grep -q 'const workspaceId = await getWorkspaceIdForUser(userId);' server/integrationsRouter.ts
           corepack enable
           corepack prepare pnpm@10.4.1 --activate
           pnpm install --frozen-lockfile
           pnpm check
-      - name: Commit repair
+      - name: Commit if changed
         run: |
+          if git diff --quiet; then
+            echo 'No changes needed.'
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add server/integrationsRouter.ts
-          git commit -m 'fix(access): resolve billing workspace through membership' || true
+          git commit -m 'fix(access): resolve billing workspace through membership'
           git push origin HEAD:fix/runtime-access-workspace-resolution
