@@ -1,0 +1,76 @@
+name: Phase 15 checkout activation readiness
+on:
+  push:
+    branches: [agent/phase15-checkout-activation-readiness]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: mysql://root:root@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase15-validation-secret-that-is-long-enough
+      VITE_APP_ID: phase15-test-app
+      OAUTH_SERVER_URL: https://api.example.com
+      VITE_OAUTH_PORTAL_URL: https://login.example.com
+      OWNER_EMAIL: dominiquereed35@gmail.com
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Apply checkout activation fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server/integrationsRouter.ts')
+          s = p.read_text()
+
+          old = '''        if (session.payment_status === "unpaid" && session.status !== "complete") {\n          return { success: false, error: "Payment not completed", status: "pending" as const };\n        }'''
+          new = '''        // A Stripe redirect alone is not proof of successful activation.\n        // Require a completed Checkout Session and a settled/no-payment-required state.\n        if (session.status !== "complete" || !["paid", "no_payment_required"].includes(session.payment_status)) {\n          return { success: false, error: "Payment not completed", status: "pending" as const };\n        }'''
+          if old not in s:
+              raise SystemExit('payment verification target not found')
+          s = s.replace(old, new)
+
+          old = '''        // Find workspace for this user\n        const [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);\n        const workspaceId = ws?.id ?? null;'''
+          new = '''        // Checkout metadata is the source of truth for the workspace being purchased.\n        // Verify that the authenticated user owns that workspace before activating it.\n        const metadataWorkspaceId = Number(session.metadata?.workspaceId || 0);\n        const [ws] = metadataWorkspaceId\n          ? await db.select().from(workspaces).where(and(eq(workspaces.id, metadataWorkspaceId), eq(workspaces.ownerId, userId))).limit(1)\n          : await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);\n        const workspaceId = ws?.id ?? null;\n        if (!workspaceId) {\n          return { success: false, error: "Checkout workspace could not be verified for this account", status: "error" as const };\n        }\n        if (metadataWorkspaceId && metadataWorkspaceId !== workspaceId) {\n          return { success: false, error: "Checkout workspace does not belong to this account", status: "error" as const };\n        }'''
+          if old not in s:
+              raise SystemExit('workspace verification target not found')
+          s = s.replace(old, new)
+
+          old = '''        // Update access state if checkout completed\n        if (session.status === "complete" && workspaceId) {\n          await updateAccessState(workspaceId, "active_paid", "Checkout completed", userId);\n          await logBillingAudit(workspaceId, "checkout_completed", userId, `Plan ${planId} checkout completed via Stripe session ${input.sessionId}`);\n        }'''
+          new = '''        // Persist the Stripe subscription before granting access so billing and\n        // authorization cannot drift apart. Re-verification is idempotent.\n        const stripeSubscription = typeof session.subscription === "string" ? null : session.subscription;\n        const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;\n        const stripeCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id;\n        if (!planId || !stripeSubscriptionId) {\n          return { success: false, error: "Stripe subscription metadata is incomplete", status: "error" as const };\n        }\n        const [existingSubscription] = await db.select().from(subscriptions)\n          .where(eq(subscriptions.workspaceId, workspaceId)).limit(1);\n        const subscriptionData = {\n          planId,\n          stripeCustomerId: stripeCustomerId || null,\n          stripeSubscriptionId,\n          status: ((stripeSubscription?.status || "active") === "trialing" ? "trialing" : "active") as "active" | "trialing",\n          currentPeriodStart: stripeSubscription?.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : null,\n          currentPeriodEnd: stripeSubscription?.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : null,\n          cancelAtPeriodEnd: stripeSubscription?.cancel_at_period_end || false,\n        };\n        if (existingSubscription) {\n          await db.update(subscriptions).set(subscriptionData).where(eq(subscriptions.id, existingSubscription.id));\n        } else {\n          await db.insert(subscriptions).values({ workspaceId, ...subscriptionData });\n        }\n        await db.update(workspaces).set({ planId }).where(eq(workspaces.id, workspaceId));\n\n        await updateAccessState(\n          workspaceId,\n          subscriptionData.status === "trialing" ? "trial_active" : "active_paid",\n          "Verified Stripe checkout completed",\n          userId\n        );\n        await logBillingAudit(workspaceId, "checkout_completed", userId, `Plan ${planId} checkout completed via Stripe session ${input.sessionId}`);'''
+          if old not in s:
+              raise SystemExit('activation target not found')
+          s = s.replace(old, new)
+          p.write_text(s)
+          PY
+      - name: Verify checkout activation assertions
+        run: |
+          grep -q 'Checkout metadata is the source of truth' server/integrationsRouter.ts
+          grep -q 'Stripe subscription before granting access' server/integrationsRouter.ts
+          grep -q 'db.insert(subscriptions)' server/integrationsRouter.ts
+          grep -q 'db.update(workspaces).set({ planId })' server/integrationsRouter.ts
+          grep -q 'session.status !== "complete"' server/integrationsRouter.ts
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified Phase 15 changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/integrationsRouter.ts
+          git commit -m 'fix(billing): persist verified checkout activation' || true
+          git push
