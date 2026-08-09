@@ -3,9 +3,11 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { COOKIE_NAME } from "@shared/const";
 import { registerOAuthRoutes } from "./oauth";
 import { validateProductionCoreEnv } from "./env";
 import { logOwnerBootstrapDiagnostic } from "./ownerBootstrapDiagnostic";
+import { getSessionCookieOptions } from "./cookies";
 import { secureHeaders, authRateLimit, apiRateLimit, inputSizeLimit } from "../middleware/security";
 import { registerStorageProxy } from "./storageProxy";
 import { stripeWebhookRouter } from "../stripeWebhook";
@@ -49,6 +51,15 @@ async function startServer() {
   // third-party incidents do not cause a healthy process to be restarted.
   app.get("/api/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
+  });
+
+  // Fresh-start helper: explicitly clear any old Manus/PrimeContractorOS
+  // session left in the browser, then send the user to the normal login page.
+  // This is intentionally public because logging out must work even when the
+  // current session references a user that was removed during a factory reset.
+  app.get("/logout", (req, res) => {
+    res.clearCookie(COOKIE_NAME, getSessionCookieOptions(req));
+    res.redirect(302, "/login");
   });
 
   // Security headers
