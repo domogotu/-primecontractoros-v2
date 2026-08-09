@@ -56,12 +56,20 @@ export async function logInternalWorkspaceDiagnostic() {
       }
     }
 
-    const [reedsCandidates] = await connection.execute(
-      "SELECT id, name, companyName, ownerId, status FROM workspaces WHERE LOWER(COALESCE(companyName, '')) LIKE '%reed%solution%' OR LOWER(name) LIKE '%reed%solution%' ORDER BY id",
+    const [allUsers] = await connection.execute(
+      "SELECT id, name, email, openId, role FROM users ORDER BY id LIMIT 100",
     );
-    console.log(
-      `[internal-workspace-diagnostic] reedsWorkspaceCandidates=${JSON.stringify(reedsCandidates)}`,
+    console.log(`[internal-workspace-diagnostic] allUsers=${JSON.stringify(allUsers)}`);
+
+    const [allWorkspaces] = await connection.execute(
+      "SELECT id, name, companyName, ownerId, status FROM workspaces ORDER BY id LIMIT 100",
     );
+    console.log(`[internal-workspace-diagnostic] allWorkspaces=${JSON.stringify(allWorkspaces)}`);
+
+    const [allMemberships] = await connection.execute(
+      "SELECT workspaceId, userId, role FROM workspaceMembers ORDER BY workspaceId, userId LIMIT 200",
+    );
+    console.log(`[internal-workspace-diagnostic] allMemberships=${JSON.stringify(allMemberships)}`);
   } catch (error) {
     console.error("[internal-workspace-diagnostic] failed", error);
   } finally {
