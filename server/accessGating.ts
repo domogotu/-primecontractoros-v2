@@ -22,7 +22,6 @@ import {
   platformAuditLog,
   billingEvents,
   users,
-  workspaces,
 } from "../drizzle/schema";
 import { eq, and, desc, or } from "drizzle-orm";
 import type { AccessState } from "../drizzle/schema";
@@ -145,22 +144,19 @@ export async function evaluateAccess(
     }
 
     // Reeds Solutions LLC is the platform owner's internal operating company.
-    // It does not receive global platform-owner permissions, but its own workspace
-    // must remain usable without purchasing a customer subscription from itself.
+    // This account must be able to use PrimeContractorOS without purchasing a
+    // customer subscription from itself. This bypass is identity-based only and
+    // does NOT grant platform-owner/admin permissions.
+    //
+    // Do not tie this exception to legacy workspace ownerId values: production
+    // contains older workspace/account records and the billing gate must not lock
+    // the internal business account out while those records are reconciled.
     if (normalizedEmail === INTERNAL_BUSINESS_EMAIL) {
-      const [ownedWorkspace] = await db
-        .select({ id: workspaces.id })
-        .from(workspaces)
-        .where(and(eq(workspaces.id, workspaceId), eq(workspaces.ownerId, userId)))
-        .limit(1);
-
-      if (ownedWorkspace) {
-        return {
-          allowed: true,
-          status: "admin_bypass",
-          reason: "Reeds Solutions LLC internal business workspace",
-        };
-      }
+      return {
+        allowed: true,
+        status: "admin_bypass",
+        reason: "Reeds Solutions LLC internal business account",
+      };
     }
   }
 
