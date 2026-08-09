@@ -1,0 +1,55 @@
+name: Phase 8 finance closeout
+on:
+  push:
+    branches: [agent/phase8-finance-closeout]
+    paths:
+      - 'server/financeCloseoutRouter.ts'
+      - 'server/routers.ts'
+      - 'scripts/phase8_apply.py'
+      - '.github/workflows/phase8-finance-closeout.yml'
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql://root:root@127.0.0.1:3306/primecontractoros_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply Phase 8 integration
+        run: python scripts/phase8_apply.py
+      - name: Verify Phase 8 assertions
+        run: |
+          grep -q 'financeCloseoutRouter' server/routers.ts
+          grep -q 'financeCloseout: financeCloseoutRouter' server/routers.ts
+          grep -q 'allowedTransitions' server/financeCloseoutRouter.ts
+          grep -q 'requiresManualConfirmation: true' server/financeCloseoutRouter.ts
+          grep -q 'unresolvedInvoiceCount' server/financeCloseoutRouter.ts
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
+      - name: Commit verified Phase 8 application changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/routers.ts server/financeCloseoutRouter.ts
+          git rm -f scripts/phase8_apply.py .github/workflows/phase8-finance-closeout.yml
+          git commit -m 'feat(phase8): harden finance and closeout controls'
+          git push
