@@ -17,8 +17,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Repair billing access workspace resolution
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
           p = Path('server/integrationsRouter.ts')
           s = p.read_text()
@@ -68,6 +69,7 @@ jobs:
               raise SystemExit('getAccessStatus anchor not found')
           s = s.replace(old, new, 1)
           p.write_text(s)
+          PY
       - name: Validate targeted change
         run: |
           grep -q 'getWorkspaceIdForUser, requireWorkspaceId' server/integrationsRouter.ts
