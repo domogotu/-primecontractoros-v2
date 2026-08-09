@@ -26,6 +26,8 @@ services:
         value: https://manus.im
       - key: OWNER_OPEN_ID
         value: 2cUjYc8q9VsFQXVDdB5U6U
+      - key: OWNER_EMAIL
+        value: dominiquereed35@gmail.com
       - key: OWNER_NAME
         value: Reed's Solutions
       - key: VITE_APP_TITLE
