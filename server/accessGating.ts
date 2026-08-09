@@ -26,6 +26,7 @@ import {
 } from "../drizzle/schema";
 import { eq, and, desc, or, isNull, gt } from "drizzle-orm";
 import type { AccessState } from "../drizzle/schema";
+import { ENV } from "./_core/env";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -145,19 +146,20 @@ export async function evaluateAccess(
 ): Promise<AccessResult> {
   const db = await getDb();
   if (!db) {
-    // If DB is unavailable, allow through to avoid blocking the app entirely
-    return { allowed: true, status: "admin_bypass", reason: "Database unavailable — access permitted" };
+    // Fail closed: billing/access state cannot be verified without the database.
+    return { allowed: false, status: "no_access", reason: "Access could not be verified because the database is unavailable" };
   }
 
-  // 1. Admin/owner bypass — platform admins always get through
+  // 1. Platform-owner bypass — reserved exclusively for the canonical owner identity.
+  // Workspace/customer admins do not bypass subscription enforcement.
   if (userId) {
     const [user] = await db
-      .select({ role: users.role })
+      .select({ email: users.email })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
-    if (user?.role === "admin") {
-      return { allowed: true, status: "admin_bypass", reason: "Platform admin account" };
+    if (user?.email?.trim().toLowerCase() === ENV.ownerEmail) {
+      return { allowed: true, status: "admin_bypass", reason: "PrimeContractorOS platform owner" };
     }
   }
 

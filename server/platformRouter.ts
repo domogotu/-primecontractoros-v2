@@ -4,7 +4,7 @@ import { getDb } from "./db";
 import { workspaces, businessProfiles, plans, discounts, platformBilling, supportTickets, platformOverrides, users, loginEvents, platformNotes, platformAuditLog, workspaceMembers, planVersions, policyVersions, backupExports, platformTasks, platformTaskRuns, billingEvents, discountUsage, consentRecords, auditLogs } from "../drizzle/schema";
 import { eq, desc, and, sql, count } from "drizzle-orm";
 import { sendWelcomeEmail } from "./services/email";
-import { getUserWorkspaceRole, requireWorkspaceId as requireWsId } from "./workspaceMiddleware";
+import { getUserWorkspaceRole, getWorkspaceIdForUser, requireWorkspaceId as requireWsId } from "./workspaceMiddleware";
 import { updateAccessState, evaluateAccess } from "./accessGating";
 import { canManageTeam, getAssignableRoles } from "./permissions";
 
@@ -19,24 +19,24 @@ export const workspaceRouter = router({
     if (!db) return null;
     const userId = ctx.user.id;
 
-    // Find workspace owned by this user
+    // Prefer a workspace owned by this user.
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);
     if (ws) return ws;
 
-    // No workspace yet. Check if this user is a platform admin — admins always get a workspace.
-    const isAdmin = ctx.user.role === "admin";
-
-    if (!isAdmin) {
-      // Check if user has a pending checkout session or valid access state before creating.
-      // We allow workspace creation if:
-      //   a) User is admin (handled above)
-      //   b) User has no workspace AND no access state — this is the very first signup
-      //      (workspace will be created, then access state set by checkout/onboarding)
-      // We do NOT block workspace creation here — the access gating happens in AppShell.
-      // This ensures the workspace exists so checkout can reference it.
+    // Invited members must resolve to the workspace they joined. Never create a
+    // second personal workspace merely because they are not the workspace owner.
+    const [membership] = await db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId))
+      .limit(1);
+    if (membership) {
+      const [memberWorkspace] = await db.select().from(workspaces)
+        .where(eq(workspaces.id, membership.workspaceId)).limit(1);
+      if (memberWorkspace) return memberWorkspace;
     }
 
-    // Auto-create workspace for new user
+    // Auto-create only for a genuinely new user with no owned or joined workspace.
     const result = await db.insert(workspaces).values({
       name: ctx.user.name ? `${ctx.user.name}'s Workspace` : "My Workspace",
       ownerId: userId,
@@ -67,7 +67,9 @@ export const workspaceRouter = router({
     const db = await getDb();
     if (!db) return { completed: false };
     const userId = ctx.user.id;
-    const [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);
+    const wsId = await getWorkspaceIdForUser(userId);
+    if (!wsId) return { completed: false };
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
     return { completed: ws?.onboardingCompleted ?? false };
   }),
 
@@ -102,9 +104,15 @@ export const workspaceRouter = router({
           await db.insert(businessProfiles).values({ workspaceId, ...profileData });
         }
       };
-      // Find or create workspace
+      // Find or create workspace. A user who already belongs to another
+      // workspace is a member, not a new workspace owner, and cannot run owner onboarding.
       let [ws] = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1);
       if (!ws) {
+        const [membership] = await db.select({ workspaceId: workspaceMembers.workspaceId })
+          .from(workspaceMembers).where(eq(workspaceMembers.userId, userId)).limit(1);
+        if (membership) {
+          throw new Error("Workspace members cannot create a second workspace through onboarding.");
+        }
         const result = await db.insert(workspaces).values({
           name: input.companyName,
           ownerId: userId,
