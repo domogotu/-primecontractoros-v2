@@ -5,6 +5,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { validateProductionCoreEnv } from "./env";
+import { logOwnerBootstrapDiagnostic } from "./ownerBootstrapDiagnostic";
 import { secureHeaders, authRateLimit, apiRateLimit, inputSizeLimit } from "../middleware/security";
 import { registerStorageProxy } from "./storageProxy";
 import { stripeWebhookRouter } from "../stripeWebhook";
@@ -35,6 +36,10 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 
 async function startServer() {
   validateProductionCoreEnv();
+
+  // Temporary, read-only diagnostic used to identify the freshly-created
+  // platform-owner OAuth identity after the production factory reset.
+  await logOwnerBootstrapDiagnostic();
 
   const app = express();
   const server = createServer(app);
