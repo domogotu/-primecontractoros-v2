@@ -1,0 +1,41 @@
+name: Phase 12 login readiness
+on:
+  push:
+    branches: [agent/phase12-login-onboarding-readiness]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: primecontractoros_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: mysql://root:root@127.0.0.1:3306/primecontractoros_test
+      JWT_SECRET: phase12-validation-secret-that-is-long-enough
+      VITE_APP_ID: phase12-test-app
+      OAUTH_SERVER_URL: https://api.example.com
+      VITE_OAUTH_PORTAL_URL: https://login.example.com
+      OWNER_EMAIL: dominiquereed35@gmail.com
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify login readiness assertions
+        run: |
+          ! grep -q 'manus-runtime-user-info' client/src/_core/hooks/useAuth.ts
+          ! grep -q 'localStorage.setItem' client/src/_core/hooks/useAuth.ts
+          grep -q 'VITE_OAUTH_PORTAL_URL' server/_core/env.ts
+          grep -q 'assertHttpsUrl("VITE_OAUTH_PORTAL_URL"' server/_core/env.ts
+      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm drizzle-kit migrate
+      - run: pnpm check
+      - run: env -u RESEND_API_KEY pnpm test
+      - run: pnpm build
