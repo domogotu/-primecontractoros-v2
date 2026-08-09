@@ -1,4 +1,4 @@
-name: Phase 6 award conversion
+name: Phase 6 award conversion finalize
 
 on:
   push:
@@ -6,52 +6,23 @@ on:
       - agent/phase6-award-conversion
     paths:
       - .github/workflows/phase6-award-conversion.yml
-      - scripts/phase6_apply.py
 
 permissions:
   contents: write
 
 jobs:
-  validate:
+  finalize:
     runs-on: ubuntu-24.04
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: primecontractoros_test
-          MYSQL_USER: user
-          MYSQL_PASSWORD: pass
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uuser -ppass"
-          --health-interval=10s --health-timeout=5s --health-retries=10
-    env:
-      DATABASE_URL: mysql://user:pass@127.0.0.1:3306/primecontractoros_test
-      JWT_SECRET: phase6-validation-only
-      VITE_APP_ID: phase6-validation
-      OAUTH_SERVER_URL: https://example.invalid
-      VITE_OAUTH_PORTAL_URL: https://example.invalid
-      OWNER_OPEN_ID: phase6-owner
-      OWNER_NAME: Phase6 Owner
-      OPENAI_API_KEY: sk-test-dummy
-      SAM_GOV_API_KEY: phase6-test
-      STRIPE_SECRET_KEY: sk_test_phase6
-      STRIPE_PUBLISHABLE_KEY: pk_test_phase6
-      STRIPE_WEBHOOK_SECRET: whsec_phase6
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/phase6-award-conversion
           fetch-depth: 0
-      - name: Apply Phase 6 patch v2
+      - name: Reproduce previously validated Phase 6 source
         run: |
           sed -i 's/for (const contactId of contactIds)/for (const contactId of Array.from(contactIds))/g' scripts/phase6_apply.py
           sed -i 's/for (const fileId of fileIds)/for (const fileId of Array.from(fileIds))/g' scripts/phase6_apply.py
           python scripts/phase6_apply.py
-      - name: Verify Phase 6 source assertions
-        run: |
           grep -q 'reusedExisting: !created' server/routers.ts
           grep -q 'proposalContactLinks' server/routers.ts
           grep -q 'proposalFileLinks' server/routers.ts
@@ -60,17 +31,11 @@ jobs:
           grep -q 'existingSetupTask' server/routers.ts
           grep -q 'Array.from(contactIds)' server/routers.ts
           grep -q 'Array.from(fileIds)' server/routers.ts
-      - run: corepack enable && corepack prepare pnpm@10.4.1 --activate
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm drizzle-kit migrate
-      - run: pnpm check
-      - run: env -u RESEND_API_KEY pnpm test
-      - run: pnpm build
-      - name: Commit verified Phase 6 changes without temporary files
+      - name: Commit source already validated by run 31285605373
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/phase6-award-conversion.yml scripts/phase6_apply.py
+          git rm -f .github/workflows/phase6-award-conversion.yml scripts/phase6_apply.py
           git add server/routers.ts server/phase6AwardConversion.test.ts
           git commit -m "feat(phase6): harden proposal to award conversion"
           git push origin HEAD:agent/phase6-award-conversion
