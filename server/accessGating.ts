@@ -21,14 +21,11 @@ import {
   platformBilling,
   platformAuditLog,
   billingEvents,
-  workspaces,
   users,
 } from "../drizzle/schema";
-import { eq, and, desc, or, isNull, gt } from "drizzle-orm";
+import { eq, and, desc, or } from "drizzle-orm";
 import type { AccessState } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type AccessStatus =
   | "active_paid"
@@ -46,16 +43,9 @@ export interface AccessResult {
   allowed: boolean;
   status: AccessStatus;
   reason?: string;
-  /** ISO string of when access expires, if applicable */
   expiresAt?: string;
 }
 
-// ─── Core helpers ─────────────────────────────────────────────────────────────
-
-/**
- * Fetch the current accessState record for a workspace.
- * Returns null if no record exists.
- */
 export async function getAccessState(workspaceId: number): Promise<AccessState | null> {
   const db = await getDb();
   if (!db) return null;
@@ -68,10 +58,6 @@ export async function getAccessState(workspaceId: number): Promise<AccessState |
   return record ?? null;
 }
 
-/**
- * Create or update the accessState record for a workspace.
- * Logs a billingEvent for the state change.
- */
 export async function updateAccessState(
   workspaceId: number,
   newState: AccessState["state"],
@@ -107,7 +93,6 @@ export async function updateAccessState(
     });
   }
 
-  // Log billing event for audit trail
   await db.insert(billingEvents).values({
     workspaceId,
     eventType: "access_state_change",
@@ -119,51 +104,46 @@ export async function updateAccessState(
   });
 }
 
-/**
- * Determine whether a given accessState value represents valid (allowed) access.
- */
 export function isAccessStateValid(state: AccessState["state"] | null | undefined): boolean {
   if (!state) return false;
   return ["trial_active", "active_paid", "limited_access"].includes(state);
 }
 
-// ─── Full access evaluation ───────────────────────────────────────────────────
-
-/**
- * Evaluate whether a workspace has valid access to the application.
- *
- * Priority order:
- *   1. Admin/owner user role bypass
- *   2. Active platform override (feature = "access_bypass" or "grace_period")
- *   3. Active subscription (status = active or trialing)
- *   4. accessStates record (trial_active, active_paid, limited_access)
- *   5. platformBilling trial still active
- *   6. Deny
- */
 export async function evaluateAccess(
   workspaceId: number,
   userId?: number
 ): Promise<AccessResult> {
   const db = await getDb();
   if (!db) {
-    // Fail closed: billing/access state cannot be verified without the database.
-    return { allowed: false, status: "no_access", reason: "Access could not be verified because the database is unavailable" };
+    return {
+      allowed: false,
+      status: "no_access",
+      reason: "Access could not be verified because the database is unavailable",
+    };
   }
 
-  // 1. Platform-owner bypass — reserved exclusively for the canonical owner identity.
-  // Workspace/customer admins do not bypass subscription enforcement.
+  // Platform-owner bypass — reserved exclusively for the canonical owner identity.
+  // Accept either the locked production email or the configured Manus OpenID so
+  // an OAuth provider that omits email cannot accidentally lock out the owner.
   if (userId) {
     const [user] = await db
-      .select({ email: users.email })
+      .select({ email: users.email, openId: users.openId })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
-    if (user?.email?.trim().toLowerCase() === ENV.ownerEmail) {
-      return { allowed: true, status: "admin_bypass", reason: "PrimeContractorOS platform owner" };
+
+    const emailMatches = user?.email?.trim().toLowerCase() === ENV.ownerEmail;
+    const openIdMatches = Boolean(ENV.ownerOpenId) && user?.openId === ENV.ownerOpenId;
+
+    if (emailMatches || openIdMatches) {
+      return {
+        allowed: true,
+        status: "admin_bypass",
+        reason: "PrimeContractorOS platform owner",
+      };
     }
   }
 
-  // 2. Platform override — check for active access_bypass or grace_period override
   const now = new Date();
   const [override] = await db
     .select()
@@ -181,7 +161,6 @@ export async function evaluateAccess(
     .limit(1);
 
   if (override) {
-    // Check expiry
     if (!override.expiresAt || override.expiresAt > now) {
       const status: AccessStatus = override.feature === "grace_period" ? "grace" : "override";
       return {
@@ -193,7 +172,6 @@ export async function evaluateAccess(
     }
   }
 
-  // 3. Active Stripe subscription
   const [sub] = await db
     .select()
     .from(subscriptions)
@@ -224,7 +202,6 @@ export async function evaluateAccess(
     }
   }
 
-  // 4. accessStates record
   const accessState = await getAccessState(workspaceId);
   if (accessState) {
     if (accessState.state === "active_paid") {
@@ -247,7 +224,6 @@ export async function evaluateAccess(
     }
   }
 
-  // 5. platformBilling trial still active
   const [pb] = await db
     .select()
     .from(platformBilling)
@@ -271,14 +247,9 @@ export async function evaluateAccess(
     }
   }
 
-  // 6. No valid access found
   return { allowed: false, status: "no_access", reason: "No active subscription or trial" };
 }
 
-/**
- * Quick boolean check — is this workspace allowed to access the app?
- * Uses evaluateAccess internally.
- */
 export async function isWorkspaceAccessAllowed(
   workspaceId: number,
   userId?: number
@@ -287,9 +258,6 @@ export async function isWorkspaceAccessAllowed(
   return result.allowed;
 }
 
-/**
- * Log a billing/access audit entry to platformAuditLog.
- */
 export async function logBillingAudit(
   workspaceId: number,
   action: string,
