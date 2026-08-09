@@ -3,6 +3,7 @@ export const ENV = {
   cookieSecret: process.env.JWT_SECRET ?? "",
   databaseUrl: process.env.DATABASE_URL ?? "",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
+  oAuthPortalUrl: process.env.VITE_OAUTH_PORTAL_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
   ownerEmail: (process.env.OWNER_EMAIL ?? "dominiquereed35@gmail.com").trim().toLowerCase(),
   isProduction: process.env.NODE_ENV === "production",
@@ -17,8 +18,21 @@ const REQUIRED_PRODUCTION_ENV: Array<[string, string]> = [
   ["JWT_SECRET", ENV.cookieSecret],
   ["VITE_APP_ID", ENV.appId],
   ["OAUTH_SERVER_URL", ENV.oAuthServerUrl],
+  ["VITE_OAUTH_PORTAL_URL", ENV.oAuthPortalUrl],
   ["OWNER_EMAIL", ENV.ownerEmail],
 ];
+
+function assertHttpsUrl(name: string, value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") {
+      throw new Error(`${name} must use HTTPS in production.`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("must use HTTPS")) throw error;
+    throw new Error(`${name} must be a valid absolute HTTPS URL in production.`);
+  }
+}
 
 export function validateProductionCoreEnv() {
   if (!ENV.isProduction) return;
@@ -41,13 +55,6 @@ export function validateProductionCoreEnv() {
     throw new Error("JWT_SECRET must be at least 32 characters in production.");
   }
 
-  try {
-    const oauthUrl = new URL(ENV.oAuthServerUrl);
-    if (oauthUrl.protocol !== "https:") {
-      throw new Error("OAUTH_SERVER_URL must use HTTPS in production.");
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("must use HTTPS")) throw error;
-    throw new Error("OAUTH_SERVER_URL must be a valid absolute HTTPS URL in production.");
-  }
+  assertHttpsUrl("OAUTH_SERVER_URL", ENV.oAuthServerUrl);
+  assertHttpsUrl("VITE_OAUTH_PORTAL_URL", ENV.oAuthPortalUrl);
 }
