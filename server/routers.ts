@@ -75,6 +75,7 @@ import { emailPreferences, aiRuns, aiSuggestions } from "../drizzle/schema";
 import { eq, desc } from "drizzle-orm";
 import { contextualHelpRouter, lifecycleRouter, autoPopulationRouter, sourceReferencesRouter, templateImprovementsRouter, helpArticlesRouter, glossaryRouter, dashboardDataRouter, aiSuggestionsEnhancedRouter, aiFindingsEnhancedRouter } from "./phase35Router";
 import { contractOperationsRouter } from "./contractOperationsRouter";
+import { financeCloseoutRouter } from "./financeCloseoutRouter";
 
 export const appRouter = router({
   pdf: pdfRouter,
@@ -100,6 +101,7 @@ export const appRouter = router({
   alerts: alertsRouter,
   deliverables: deliverablesRouter,
   contractOperations: contractOperationsRouter,
+  financeCloseout: financeCloseoutRouter,
   deadlines: deadlinesRouter,
   obligations: obligationsRouter,
   compliance: complianceRouter,
