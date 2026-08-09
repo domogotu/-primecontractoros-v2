@@ -136,7 +136,7 @@ export const contractOperationsRouter = router({
           title: contract.title,
           contractNumber: contract.contractNumber,
           status: contract.status,
-          healthStatus: contract.healthStatus,
+          health: contract.health,
         },
         documents: {
           total: contractFiles.length,
