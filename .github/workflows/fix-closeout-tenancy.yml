@@ -1,0 +1,66 @@
+name: One-time closeout tenancy repair
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce closeout workspace ownership
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('server/integrationsRouter.ts')
+          text = path.read_text()
+
+          replacements = []
+
+          old = '''      // Check if closeout already exists\n      const [existing] = await db\n        .select()\n        .from(closeoutRecords)\n        .where(and(eq(closeoutRecords.contractId, input.contractId), eq(closeoutRecords.workspaceId, workspaceId)));\n'''
+          new = '''      // Verify the contract belongs to the active workspace before creating or returning closeout data.\n      const [contract] = await db\n        .select({ id: contracts.id })\n        .from(contracts)\n        .where(and(eq(contracts.id, input.contractId), eq(contracts.workspaceId, workspaceId), isNull(contracts.deletedAt)))\n        .limit(1);\n      if (!contract) throw new Error("Contract not found in this workspace");\n\n      // Check if closeout already exists\n      const [existing] = await db\n        .select()\n        .from(closeoutRecords)\n        .where(and(eq(closeoutRecords.contractId, input.contractId), eq(closeoutRecords.workspaceId, workspaceId)));\n'''
+          replacements.append((old, new, 'initiate contract ownership'))
+
+          old = '''    .mutation(async ({ ctx, input }) => {\n      const db = await getDb();\n      if (!db) throw new Error("Database not available");\n\n      await db\n        .update(closeoutChecklistItems)\n        .set({\n'''
+          new = '''    .mutation(async ({ ctx, input }) => {\n      const workspaceId = await requireWorkspaceId(ctx.user.id);\n      const db = await getDb();\n      if (!db) throw new Error("Database not available");\n\n      const [ownedItem] = await db\n        .select({ id: closeoutChecklistItems.id })\n        .from(closeoutChecklistItems)\n        .innerJoin(closeoutRecords, eq(closeoutChecklistItems.closeoutId, closeoutRecords.id))\n        .where(and(eq(closeoutChecklistItems.id, input.itemId), eq(closeoutRecords.workspaceId, workspaceId)))\n        .limit(1);\n      if (!ownedItem) throw new Error("Closeout checklist item not found in this workspace");\n\n      await db\n        .update(closeoutChecklistItems)\n        .set({\n'''
+          replacements.append((old, new, 'toggle item ownership'))
+
+          old = '''    .mutation(async ({ ctx, input }) => {\n      const db = await getDb();\n      if (!db) throw new Error("Database not available");\n      const { itemId, dueDate, status, ...rest } = input;\n'''
+          new = '''    .mutation(async ({ ctx, input }) => {\n      const workspaceId = await requireWorkspaceId(ctx.user.id);\n      const db = await getDb();\n      if (!db) throw new Error("Database not available");\n      const [ownedItem] = await db\n        .select({ id: closeoutChecklistItems.id })\n        .from(closeoutChecklistItems)\n        .innerJoin(closeoutRecords, eq(closeoutChecklistItems.closeoutId, closeoutRecords.id))\n        .where(and(eq(closeoutChecklistItems.id, input.itemId), eq(closeoutRecords.workspaceId, workspaceId)))\n        .limit(1);\n      if (!ownedItem) throw new Error("Closeout checklist item not found in this workspace");\n      const { itemId, dueDate, status, ...rest } = input;\n'''
+          replacements.append((old, new, 'update item ownership'))
+
+          old = '''    .mutation(async ({ ctx, input }) => {\n      const db = await getDb();\n      if (!db) throw new Error("Database not available");\n      const [result] = await db.insert(closeoutChecklistItems).values({\n'''
+          new = '''    .mutation(async ({ ctx, input }) => {\n      const workspaceId = await requireWorkspaceId(ctx.user.id);\n      const db = await getDb();\n      if (!db) throw new Error("Database not available");\n      const [ownedCloseout] = await db\n        .select({ id: closeoutRecords.id })\n        .from(closeoutRecords)\n        .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)))\n        .limit(1);\n      if (!ownedCloseout) throw new Error("Closeout record not found in this workspace");\n      const [result] = await db.insert(closeoutChecklistItems).values({\n'''
+          replacements.append((old, new, 'add item ownership'))
+
+          for old, new, label in replacements:
+            if old not in text:
+              raise SystemExit(f'Expected anchor not found for {label}; refusing to modify the file.')
+            text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/integrationsRouter.ts
+          if git diff --cached --quiet; then
+            echo 'No repair needed.'
+          else
+            git commit -m 'fix(closeout): enforce workspace isolation on checklist operations'
+            git push origin HEAD:main
+          fi
