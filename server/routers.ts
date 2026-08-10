@@ -737,6 +737,12 @@ export const appRouter = router({
 
           const proposal = await getProposal(input.proposalId, wsId);
           if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found." });
+          if (proposal.status !== "won") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "Only a proposal marked Won can be converted to an awarded contract. Confirm the award outcome before creating the contract record.",
+            });
+          }
           const cf = input.carryForward || { contacts: true, files: true, notes: true, tasks: false, deliverables: true };
 
           const existingContracts = await db.select().from(contractsTbl).where(andOp(
