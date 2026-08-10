@@ -1728,7 +1728,7 @@ export const lessonsLearnedRouter = router({
       positive: all.filter(l => l.impact === "positive").length,
       negative: all.filter(l => l.impact === "negative").length,
       neutral: all.filter(l => l.impact === "neutral").length,
-      applied: all.filter(l => (l as any).lessonStatus === "applied" || l.appliedToTemplateId).length,
+      applied: all.filter(l => l.status === "applied" || l.appliedToTemplateId).length,
     };
   }),
 
@@ -1742,13 +1742,13 @@ export const lessonsLearnedRouter = router({
       switch (input.recordType) {
         case "contract":
           return (await db.select({ id: contracts.id, title: contracts.title }).from(contracts)
-            .where(eq(contracts.workspaceId, workspaceId))).map(r => ({ id: r.id, title: r.title }));
+            .where(and(eq(contracts.workspaceId, workspaceId), isNull(contracts.deletedAt)))).map(r => ({ id: r.id, title: r.title }));
         case "proposal":
           return (await db.select({ id: proposals.id, title: proposals.title }).from(proposals)
-            .where(eq(proposals.workspaceId, workspaceId))).map(r => ({ id: r.id, title: r.title }));
+            .where(and(eq(proposals.workspaceId, workspaceId), isNull(proposals.deletedAt)))).map(r => ({ id: r.id, title: r.title }));
         case "opportunity":
           return (await db.select({ id: opportunities.id, title: opportunities.title }).from(opportunities)
-            .where(eq(opportunities.workspaceId, workspaceId))).map(r => ({ id: r.id, title: r.title }));
+            .where(and(eq(opportunities.workspaceId, workspaceId), isNull(opportunities.deletedAt)))).map(r => ({ id: r.id, title: r.title }));
         default:
           return [];
       }
