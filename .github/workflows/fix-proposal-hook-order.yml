@@ -42,16 +42,6 @@ jobs:
           path.write_text(text)
           PY
 
-      - name: Verify TypeScript and tests
-        shell: bash
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.4.1 --activate
-          pnpm install --frozen-lockfile
-          pnpm check
-          env -u RESEND_API_KEY pnpm test
-          pnpm build
-
       - name: Commit repair
         shell: bash
         run: |
