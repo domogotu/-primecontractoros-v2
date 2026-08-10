@@ -1440,6 +1440,9 @@ export const lessonsLearnedRouter = router({
         .orderBy(desc(lessonsLearned.createdAt));
 
       // Apply filters in memory for flexibility
+      if (input?.contractId) {
+        results = results.filter(r => r.contractId === input.contractId);
+      }
       if (input?.lessonType && input.lessonType !== "all") {
         results = results.filter(r => r.lessonType === input.lessonType);
       }
@@ -1598,6 +1601,35 @@ export const lessonsLearnedRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
       const { id, ...data } = input;
+
+      if (input.linkedRecordType !== undefined || input.linkedRecordId !== undefined) {
+        const [existingLesson] = await db.select({
+          linkedRecordType: lessonsLearned.linkedRecordType,
+          linkedRecordId: lessonsLearned.linkedRecordId,
+        }).from(lessonsLearned)
+          .where(and(eq(lessonsLearned.id, id), eq(lessonsLearned.workspaceId, workspaceId)))
+          .limit(1);
+        if (!existingLesson) throw new Error("Lesson not found.");
+
+        const nextType = input.linkedRecordType ?? existingLesson.linkedRecordType;
+        const nextId = input.linkedRecordId ?? existingLesson.linkedRecordId;
+        if (nextType && nextId) {
+          if (nextType === "contract") {
+            const [owned] = await db.select({ id: contracts.id }).from(contracts)
+              .where(and(eq(contracts.id, nextId), eq(contracts.workspaceId, workspaceId), isNull(contracts.deletedAt))).limit(1);
+            if (!owned) throw new Error("Linked contract not found in this workspace");
+          } else if (nextType === "proposal") {
+            const [owned] = await db.select({ id: proposals.id }).from(proposals)
+              .where(and(eq(proposals.id, nextId), eq(proposals.workspaceId, workspaceId), isNull(proposals.deletedAt))).limit(1);
+            if (!owned) throw new Error("Linked proposal not found in this workspace");
+          } else if (nextType === "opportunity") {
+            const [owned] = await db.select({ id: opportunities.id }).from(opportunities)
+              .where(and(eq(opportunities.id, nextId), eq(opportunities.workspaceId, workspaceId), isNull(opportunities.deletedAt))).limit(1);
+            if (!owned) throw new Error("Linked opportunity not found in this workspace");
+          }
+        }
+      }
+
       // Remove undefined keys
       const updateData: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(data)) {
