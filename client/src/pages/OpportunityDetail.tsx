@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import {
   AlertCircle,
@@ -6,7 +6,6 @@ import {
   Building2,
   Calendar,
   CheckCircle2,
-  Clock,
   ExternalLink,
   FileText,
   Hash,
@@ -124,17 +123,14 @@ export default function OpportunityDetail() {
     contacts = [];
   }
 
-  const automaticChecks = useMemo(() => {
-    const items: Array<{ id: string; severity: "high" | "medium"; title: string; why: string }> = [];
-    if (isOverdue) items.push({ id: "overdue", severity: "high", title: "Response date has passed", why: "Confirm whether the opportunity is still actionable before spending more time on it." });
-    if (!opp.dueDate) items.push({ id: "due", severity: "high", title: "Due date is missing", why: "A pursuit decision is risky without a confirmed response deadline." });
-    if (!opp.naics) items.push({ id: "naics", severity: "medium", title: "NAICS has not been captured", why: "NAICS affects eligibility, size standards, and fit analysis." });
-    if (!opp.description && !opp.summary) items.push({ id: "description", severity: "medium", title: "Opportunity description is missing", why: "The system has limited context for analysis until the source description is available." });
-    if (sourceFiles.length === 0) items.push({ id: "files", severity: "medium", title: "No solicitation files are attached", why: "Requirements and terms may exist only in attachments." });
-    if (opp.importStatus === "sync_failed") items.push({ id: "sync", severity: "high", title: "SAM.gov sync failed", why: "The stored opportunity may not reflect the current notice or amendments." });
-    if (["new", "in_review"].includes(status)) items.push({ id: "decision", severity: "medium", title: "Pursuit decision is still open", why: "Review fit, requirements, risk, and resources before moving into proposal work." });
-    return items;
-  }, [isOverdue, opp.dueDate, opp.naics, opp.description, opp.summary, opp.importStatus, sourceFiles.length, status]);
+  const automaticChecks: Array<{ id: string; severity: "high" | "medium"; title: string; why: string }> = [];
+  if (isOverdue) automaticChecks.push({ id: "overdue", severity: "high", title: "Response date has passed", why: "Confirm whether the opportunity is still actionable before spending more time on it." });
+  if (!opp.dueDate) automaticChecks.push({ id: "due", severity: "high", title: "Due date is missing", why: "A pursuit decision is risky without a confirmed response deadline." });
+  if (!opp.naics) automaticChecks.push({ id: "naics", severity: "medium", title: "NAICS has not been captured", why: "NAICS affects eligibility, size standards, and fit analysis." });
+  if (!opp.description && !opp.summary) automaticChecks.push({ id: "description", severity: "medium", title: "Opportunity description is missing", why: "The system has limited context for analysis until the source description is available." });
+  if (sourceFiles.length === 0) automaticChecks.push({ id: "files", severity: "medium", title: "No solicitation files are attached", why: "Requirements and terms may exist only in attachments." });
+  if (opp.importStatus === "sync_failed") automaticChecks.push({ id: "sync", severity: "high", title: "SAM.gov sync failed", why: "The stored opportunity may not reflect the current notice or amendments." });
+  if (["new", "in_review"].includes(status)) automaticChecks.push({ id: "decision", severity: "medium", title: "Pursuit decision is still open", why: "Review fit, requirements, risk, and resources before moving into proposal work." });
 
   const checklistItems = [
     { key: "source_url", label: "Source URL or notice verified" },
@@ -386,9 +382,7 @@ export default function OpportunityDetail() {
             <DialogBody>
               <div className="space-y-4">
                 <div><Label htmlFor="proposal-title">Proposal Title</Label><Input id="proposal-title" value={proposalTitle} onChange={(e) => setProposalTitle(e.target.value)} className="mt-2" /></div>
-                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
-                  The proposal will inherit the opportunity context. Keep only the additional record groups you want carried forward.
-                </div>
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">The proposal will inherit the opportunity context. Keep only the additional record groups you want carried forward.</div>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <p className="mb-3 text-sm font-medium text-slate-700">Carry forward</p>
                   <div className="space-y-2">
