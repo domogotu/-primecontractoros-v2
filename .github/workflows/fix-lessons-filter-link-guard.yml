@@ -1,0 +1,55 @@
+name: One-time lessons filter and link guard repair
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fix lessons filters and update link validation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('server/integrationsRouter.ts')
+          text = path.read_text()
+
+          old = '''      // Apply filters in memory for flexibility\n      if (input?.lessonType && input.lessonType !== "all") {\n'''
+          new = '''      // Apply filters in memory for flexibility\n      if (input?.contractId) {\n        results = results.filter(r => r.contractId === input.contractId);\n      }\n      if (input?.lessonType && input.lessonType !== "all") {\n'''
+          if old not in text:
+            raise SystemExit('Lessons list filter anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''      const { id, ...data } = input;\n      // Remove undefined keys\n      const updateData: Record<string, unknown> = {};\n'''
+          new = '''      const { id, ...data } = input;\n\n      if (input.linkedRecordType !== undefined || input.linkedRecordId !== undefined) {\n        const [existingLesson] = await db.select({\n          linkedRecordType: lessonsLearned.linkedRecordType,\n          linkedRecordId: lessonsLearned.linkedRecordId,\n        }).from(lessonsLearned)\n          .where(and(eq(lessonsLearned.id, id), eq(lessonsLearned.workspaceId, workspaceId)))\n          .limit(1);\n        if (!existingLesson) throw new Error("Lesson not found.");\n\n        const nextType = input.linkedRecordType ?? existingLesson.linkedRecordType;\n        const nextId = input.linkedRecordId ?? existingLesson.linkedRecordId;\n        if (nextType && nextId) {\n          if (nextType === "contract") {\n            const [owned] = await db.select({ id: contracts.id }).from(contracts)\n              .where(and(eq(contracts.id, nextId), eq(contracts.workspaceId, workspaceId), isNull(contracts.deletedAt))).limit(1);\n            if (!owned) throw new Error("Linked contract not found in this workspace");\n          } else if (nextType === "proposal") {\n            const [owned] = await db.select({ id: proposals.id }).from(proposals)\n              .where(and(eq(proposals.id, nextId), eq(proposals.workspaceId, workspaceId), isNull(proposals.deletedAt))).limit(1);\n            if (!owned) throw new Error("Linked proposal not found in this workspace");\n          } else if (nextType === "opportunity") {\n            const [owned] = await db.select({ id: opportunities.id }).from(opportunities)\n              .where(and(eq(opportunities.id, nextId), eq(opportunities.workspaceId, workspaceId), isNull(opportunities.deletedAt))).limit(1);\n            if (!owned) throw new Error("Linked opportunity not found in this workspace");\n          }\n        }\n      }\n\n      // Remove undefined keys\n      const updateData: Record<string, unknown> = {};\n'''
+          if old not in text:
+            raise SystemExit('Lessons update anchor not found')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/integrationsRouter.ts
+          if git diff --cached --quiet; then
+            echo 'No repair needed.'
+          else
+            git commit -m 'fix(lessons): honor contract filter and guard relinking'
+            git push origin HEAD:main
+          fi
