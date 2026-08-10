@@ -966,6 +966,14 @@ export const closeoutRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
+      // Verify the contract belongs to the active workspace before creating or returning closeout data.
+      const [contract] = await db
+        .select({ id: contracts.id })
+        .from(contracts)
+        .where(and(eq(contracts.id, input.contractId), eq(contracts.workspaceId, workspaceId), isNull(contracts.deletedAt)))
+        .limit(1);
+      if (!contract) throw new Error("Contract not found in this workspace");
+
       // Check if closeout already exists
       const [existing] = await db
         .select()
@@ -1016,8 +1024,17 @@ export const closeoutRouter = router({
   toggleItem: protectedProcedure
     .input(z.object({ itemId: z.number(), completed: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
+      const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+
+      const [ownedItem] = await db
+        .select({ id: closeoutChecklistItems.id })
+        .from(closeoutChecklistItems)
+        .innerJoin(closeoutRecords, eq(closeoutChecklistItems.closeoutId, closeoutRecords.id))
+        .where(and(eq(closeoutChecklistItems.id, input.itemId), eq(closeoutRecords.workspaceId, workspaceId)))
+        .limit(1);
+      if (!ownedItem) throw new Error("Closeout checklist item not found in this workspace");
 
       await db
         .update(closeoutChecklistItems)
@@ -1041,8 +1058,16 @@ export const closeoutRouter = router({
       description: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+      const [ownedItem] = await db
+        .select({ id: closeoutChecklistItems.id })
+        .from(closeoutChecklistItems)
+        .innerJoin(closeoutRecords, eq(closeoutChecklistItems.closeoutId, closeoutRecords.id))
+        .where(and(eq(closeoutChecklistItems.id, input.itemId), eq(closeoutRecords.workspaceId, workspaceId)))
+        .limit(1);
+      if (!ownedItem) throw new Error("Closeout checklist item not found in this workspace");
       const { itemId, dueDate, status, ...rest } = input;
       const setData: any = { ...rest };
       if (status) {
@@ -1069,8 +1094,15 @@ export const closeoutRouter = router({
       dueDate: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+      const [ownedCloseout] = await db
+        .select({ id: closeoutRecords.id })
+        .from(closeoutRecords)
+        .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)))
+        .limit(1);
+      if (!ownedCloseout) throw new Error("Closeout record not found in this workspace");
       const [result] = await db.insert(closeoutChecklistItems).values({
         closeoutId: input.closeoutId,
         label: input.label,
