@@ -1093,9 +1093,45 @@ export const appRouter = router({
       .mutation(async ({ input, ctx }) => {
         try {
           const { wsId } = await enforcePermission(ctx.user.id, "write");
-          // Get current contract to capture previous status
+          // Contract lifecycle changes are protected server-side so API callers cannot skip required stages.
           const contract = await getContract(input.id, wsId);
-          const previousStatus = contract?.status || "unknown";
+          if (!contract) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Contract not found." });
+          }
+          const previousStatus = contract.status || "setup";
+          const allowedTransitions: Record<string, string[]> = {
+            setup: ["active", "suspended"],
+            active: ["modification", "closeout", "suspended"],
+            modification: ["active", "closeout", "suspended"],
+            suspended: ["active", "closeout"],
+            closeout: ["active", "closed"],
+            closed: [],
+          };
+          if (input.status !== previousStatus && !(allowedTransitions[previousStatus] || []).includes(input.status)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Invalid contract status transition: ${previousStatus} → ${input.status}. Follow the contract lifecycle instead of skipping stages.`,
+            });
+          }
+
+          // A contract cannot be marked Closed until its closeout record has passed all required-item/blocker checks.
+          if (input.status === "closed" && previousStatus !== "closed") {
+            const db2 = await getDb();
+            if (!db2) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available." });
+            const { closeoutRecords } = await import("../drizzle/schema");
+            const { and: andStatus, eq: eqStatus } = await import("drizzle-orm");
+            const [closeout] = await db2.select({ status: closeoutRecords.status }).from(closeoutRecords).where(andStatus(
+              eqStatus(closeoutRecords.workspaceId, wsId),
+              eqStatus(closeoutRecords.contractId, input.id),
+            )).limit(1);
+            if (!closeout || closeout.status !== "completed") {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: "Complete the contract closeout checklist and resolve or waive all closeout blockers before marking this contract Closed.",
+              });
+            }
+          }
+
           await updateContractStatus(input.id, wsId, input.status);
           // Send email notification about status change (fire-and-forget)
           try {
