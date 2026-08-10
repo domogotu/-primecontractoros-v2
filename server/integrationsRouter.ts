@@ -1131,6 +1131,12 @@ export const closeoutRouter = router({
       const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+      const [ownedCloseout] = await db
+        .select({ id: closeoutRecords.id })
+        .from(closeoutRecords)
+        .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)))
+        .limit(1);
+      if (!ownedCloseout) throw new Error("Closeout record not found in this workspace");
       const [result] = await db.insert(closeoutBlockingItems).values({
         closeoutId: input.closeoutId,
         workspaceId,
@@ -1192,6 +1198,47 @@ export const closeoutRouter = router({
       const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+      const [ownedCloseout] = await db
+        .select({ id: closeoutRecords.id })
+        .from(closeoutRecords)
+        .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)))
+        .limit(1);
+      if (!ownedCloseout) throw new Error("Closeout record not found in this workspace");
+
+      if (input.linkedItemType === "checklist_item") {
+        const [ownedItem] = await db
+          .select({ id: closeoutChecklistItems.id })
+          .from(closeoutChecklistItems)
+          .innerJoin(closeoutRecords, eq(closeoutChecklistItems.closeoutId, closeoutRecords.id))
+          .where(and(
+            eq(closeoutChecklistItems.id, input.linkedItemId),
+            eq(closeoutChecklistItems.closeoutId, input.closeoutId),
+            eq(closeoutRecords.workspaceId, workspaceId),
+          ))
+          .limit(1);
+        if (!ownedItem) throw new Error("Closeout checklist item not found in this workspace");
+      } else {
+        const [ownedBlocker] = await db
+          .select({ id: closeoutBlockingItems.id })
+          .from(closeoutBlockingItems)
+          .where(and(
+            eq(closeoutBlockingItems.id, input.linkedItemId),
+            eq(closeoutBlockingItems.closeoutId, input.closeoutId),
+            eq(closeoutBlockingItems.workspaceId, workspaceId),
+          ))
+          .limit(1);
+        if (!ownedBlocker) throw new Error("Closeout blocker not found in this workspace");
+      }
+
+      if (input.fileId) {
+        const [ownedFile] = await db
+          .select({ id: files.id })
+          .from(files)
+          .where(and(eq(files.id, input.fileId), eq(files.workspaceId, workspaceId), isNull(files.deletedAt)))
+          .limit(1);
+        if (!ownedFile) throw new Error("Evidence file not found in this workspace");
+      }
+
       const [result] = await db.insert(closeoutEvidence).values({
         workspaceId,
         closeoutId: input.closeoutId,
@@ -1296,6 +1343,13 @@ export const closeoutRouter = router({
       const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+
+      const [ownedCloseout] = await db
+        .select({ id: closeoutRecords.id })
+        .from(closeoutRecords)
+        .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)))
+        .limit(1);
+      if (!ownedCloseout) throw new Error("Closeout record not found in this workspace");
 
       // If trying to complete, enforce blocker check
       if (input.status === "completed") {
