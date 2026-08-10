@@ -367,6 +367,13 @@ export default function ProposalDetail() {
   const updateStatusMutation = trpc.proposals.updateStatus.useMutation();
   const convertToContractMutation = trpc.proposals.convertToContract.useMutation();
 
+  // Hooks must run before any conditional return. Track the record only after data exists.
+  useEffect(() => {
+    if (proposal && proposalId) {
+      addRecord({ type: 'proposal', id: proposalId, title: proposal.title, route: `/app/proposals/${proposalId}` });
+    }
+  }, [proposal?.id, proposalId, proposal?.title, addRecord]);
+
   if (!proposalId) {
     return (
       <PageLayout title="Proposal Workspace" subtitle="Build and manage your proposal" label="Proposals">
@@ -400,13 +407,6 @@ export default function ProposalDetail() {
       </PageLayout>
     );
   }
-
-  // Track this record as recently viewed
-  useEffect(() => {
-    if (proposal && proposalId) {
-      addRecord({ type: 'proposal', id: proposalId, title: proposal.title, route: `/app/proposals/${proposalId}` });
-    }
-  }, [proposal?.id]);
 
   const statusColors: Record<string, string> = {
     draft: 'bg-gray-100 text-gray-800',
