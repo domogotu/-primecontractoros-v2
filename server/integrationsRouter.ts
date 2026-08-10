@@ -1375,6 +1375,32 @@ export const closeoutRouter = router({
           completedBy: input.status === "completed" ? ctx.user?.id || null : null,
         })
         .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)));
+
+      if (input.status === "completed") {
+        const [closeoutRecord] = await db.select({ contractId: closeoutRecords.contractId }).from(closeoutRecords)
+          .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId))).limit(1);
+        if (closeoutRecord?.contractId) {
+          const lessonTaskTitle = "Capture lessons learned before final contract closure";
+          const [existingLessonTask] = await db.select({ id: tasks.id }).from(tasks).where(and(
+            eq(tasks.workspaceId, workspaceId),
+            eq(tasks.linkedRecordType, "contract"),
+            eq(tasks.linkedRecordId, closeoutRecord.contractId),
+            eq(tasks.title, lessonTaskTitle),
+          )).limit(1);
+          if (!existingLessonTask) {
+            await db.insert(tasks).values({
+              workspaceId,
+              title: lessonTaskTitle,
+              description: "Closeout is complete. Review performance, subcontractor execution, compliance, billing, communication, risks, and reusable improvements. Record lessons before marking the contract Closed.",
+              linkedRecordType: "contract",
+              linkedRecordId: closeoutRecord.contractId,
+              priority: "medium",
+              status: "todo",
+            });
+          }
+        }
+      }
+
       try { await logAudit(workspaceId, ctx.user.id, "update", "closeout", input.closeoutId, { status: input.status }); } catch {}
       return { success: true };
     }),
@@ -1484,6 +1510,35 @@ export const lessonsLearnedRouter = router({
       const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+
+      if (input.contractId) {
+        const [ownedContract] = await db.select({ id: contracts.id }).from(contracts)
+          .where(and(eq(contracts.id, input.contractId), eq(contracts.workspaceId, workspaceId), isNull(contracts.deletedAt)))
+          .limit(1);
+        if (!ownedContract) throw new Error("Contract not found in this workspace");
+      }
+      if (input.proposalId) {
+        const [ownedProposal] = await db.select({ id: proposals.id }).from(proposals)
+          .where(and(eq(proposals.id, input.proposalId), eq(proposals.workspaceId, workspaceId), isNull(proposals.deletedAt)))
+          .limit(1);
+        if (!ownedProposal) throw new Error("Proposal not found in this workspace");
+      }
+      if (input.linkedRecordType && input.linkedRecordId) {
+        if (input.linkedRecordType === "contract") {
+          const [owned] = await db.select({ id: contracts.id }).from(contracts)
+            .where(and(eq(contracts.id, input.linkedRecordId), eq(contracts.workspaceId, workspaceId), isNull(contracts.deletedAt))).limit(1);
+          if (!owned) throw new Error("Linked contract not found in this workspace");
+        } else if (input.linkedRecordType === "proposal") {
+          const [owned] = await db.select({ id: proposals.id }).from(proposals)
+            .where(and(eq(proposals.id, input.linkedRecordId), eq(proposals.workspaceId, workspaceId), isNull(proposals.deletedAt))).limit(1);
+          if (!owned) throw new Error("Linked proposal not found in this workspace");
+        } else if (input.linkedRecordType === "opportunity") {
+          const [owned] = await db.select({ id: opportunities.id }).from(opportunities)
+            .where(and(eq(opportunities.id, input.linkedRecordId), eq(opportunities.workspaceId, workspaceId), isNull(opportunities.deletedAt))).limit(1);
+          if (!owned) throw new Error("Linked opportunity not found in this workspace");
+        }
+      }
+
       const [result] = await db.insert(lessonsLearned).values({
         workspaceId,
         title: input.title,
@@ -1590,7 +1645,7 @@ export const lessonsLearnedRouter = router({
       // Mark lesson as applied
       await db.update(lessonsLearned).set({ appliedToTemplateId: input.templateId, status: "applied" })
         .where(eq(lessonsLearned.id, input.lessonId));
-      try { await logAudit(workspaceId, ctx.user.id, "delete", "lessonsLearned", 0, null); } catch {}
+      try { await logAudit(workspaceId, ctx.user.id, "update", "lessonsLearned", input.lessonId, { action: "applyToTemplate", templateId: input.templateId }); } catch {}
       return { success: true };
     }),
 
@@ -1625,7 +1680,7 @@ export const lessonsLearnedRouter = router({
       // Link task back to lesson
       await db.update(lessonsLearned).set({ createdTaskId: taskResult.insertId })
         .where(eq(lessonsLearned.id, input.lessonId));
-      try { await logAudit(workspaceId, ctx.user.id, "delete", "lessonsLearned", 0, null); } catch {}
+      try { await logAudit(workspaceId, ctx.user.id, "create", "tasks", Number(taskResult.insertId), { source: "lesson", lessonId: input.lessonId }); } catch {}
       return { success: true, taskId: taskResult.insertId };
     }),
 
