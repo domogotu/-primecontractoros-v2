@@ -1,6 +1,8 @@
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
-import { getProposal, getContract } from "./db";
+import { getProposal, getContract, getDb } from "./db";
+import { proposals, lossReviews } from "../drizzle/schema";
+import { and, eq } from "drizzle-orm";
 import { requireWorkspaceId } from "./workspaceMiddleware";
 import { enforcePermission, enforceAction } from "./rbacMiddleware";
 import { logAudit } from "./featureRouter";
@@ -837,14 +839,40 @@ export const lossReviewsRouter = router({
     .input(z.object({ proposalId: z.number(), reviewDate: z.string().optional(), reasonLost: z.string().optional(), competitorInfo: z.string().optional(), lessonsLearned: z.string().optional(), actionItems: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const wsId = await requireWrite(ctx);
-      const proposal = await getProposal(input.proposalId, wsId);
-      if (!proposal) throw new Error("Proposal not found in this workspace");
-      if (proposal.status !== "lost") throw new Error("Loss reviews can only be created for proposals marked Lost.");
-      const existingReviews = await listLossReviews(wsId);
-      if (existingReviews.some((review: any) => review.proposalId === input.proposalId)) throw new Error("A loss review already exists for this proposal.");
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
       const { reviewDate, ...rest } = input;
-      try { await logAudit(wsId, ctx.user.id, "create", "lossReviews", 0, input); } catch {}
-      return createLossReview({ ...rest, workspaceId: wsId, reviewDate: reviewDate ? new Date(reviewDate) : undefined });
+
+      const result = await db.transaction(async (tx) => {
+        // Lock the proposal row so concurrent requests for the same proposal serialize.
+        const [proposal] = await tx
+          .select({ id: proposals.id, status: proposals.status })
+          .from(proposals)
+          .where(and(eq(proposals.id, input.proposalId), eq(proposals.workspaceId, wsId)))
+          .for("update")
+          .limit(1);
+        if (!proposal) throw new Error("Proposal not found in this workspace");
+        if (proposal.status !== "lost") {
+          throw new Error("Loss reviews can only be created for proposals marked Lost.");
+        }
+
+        const [existingReview] = await tx
+          .select({ id: lossReviews.id })
+          .from(lossReviews)
+          .where(and(eq(lossReviews.workspaceId, wsId), eq(lossReviews.proposalId, input.proposalId)))
+          .limit(1);
+        if (existingReview) throw new Error("A loss review already exists for this proposal.");
+
+        const [insertResult] = await tx.insert(lossReviews).values({
+          ...rest,
+          workspaceId: wsId,
+          reviewDate: reviewDate ? new Date(reviewDate) : undefined,
+        });
+        return { id: insertResult.insertId };
+      });
+
+      try { await logAudit(wsId, ctx.user.id, "create", "lossReviews", result.id, input); } catch {}
+      return result;
     }),
   update: protectedProcedure
     .input(z.object({ id: z.number(), reasonLost: z.string().optional(), competitorInfo: z.string().optional(), lessonsLearned: z.string().optional(), actionItems: z.string().optional(), status: z.string().optional() }))
