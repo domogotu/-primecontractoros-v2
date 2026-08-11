@@ -13,7 +13,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { requireWorkspaceId } from "./workspaceMiddleware";
-import { getDb } from "./db";
+import { getDb, getContract, getOpportunity, getProposal } from "./db";
 import {
   aiRuns, aiFindings, aiSuggestions, aiExtractedObligations, aiUsageLogs, aiFindingHistory,
   type AiFinding, type AiExtractedObligation,
@@ -28,6 +28,8 @@ import {
   createComplianceItem,
   createContractRequirement,
   createAlert,
+  getFileById,
+  getInvoiceById,
 } from "./entityDb";
 import { logAudit } from "./featureRouter";
 import { invokeLLM } from "./_core/llm";
@@ -233,7 +235,9 @@ export const aiRouter = router({
     contractScan: protectedProcedure
       .input(z.object({ workspaceId: z.number(), contractId: z.number(), documentContent: z.string(), contractTitle: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+        await requireActiveWorkspace(ctx, input.workspaceId);
+        const contract = await getContract(input.contractId, input.workspaceId);
+        if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contract not found in this workspace" });
         return await runContractScan(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "contract", recordId: input.contractId, runType: "contract_scan" },
           input.documentContent,
@@ -244,7 +248,9 @@ export const aiRouter = router({
     opportunityReview: protectedProcedure
       .input(z.object({ workspaceId: z.number(), opportunityId: z.number(), opportunityData: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+        await requireActiveWorkspace(ctx, input.workspaceId);
+        const opportunity = await getOpportunity(input.opportunityId, input.workspaceId);
+        if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found in this workspace" });
         return await runOpportunityReview(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "opportunity", recordId: input.opportunityId, runType: "opportunity_review" },
           input.opportunityData
@@ -254,7 +260,9 @@ export const aiRouter = router({
     proposalReview: protectedProcedure
       .input(z.object({ workspaceId: z.number(), proposalId: z.number(), proposalData: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+        await requireActiveWorkspace(ctx, input.workspaceId);
+        const proposal = await getProposal(input.proposalId, input.workspaceId);
+        if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found in this workspace" });
         return await runProposalReview(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "proposal", recordId: input.proposalId, runType: "proposal_review" },
           input.proposalData
@@ -264,7 +272,9 @@ export const aiRouter = router({
     fileAnalysis: protectedProcedure
       .input(z.object({ workspaceId: z.number(), fileId: z.number(), fileContent: z.string(), fileName: z.string(), analysisType: z.string().default("analyze") }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+        await requireActiveWorkspace(ctx, input.workspaceId);
+        const file = await getFileById(input.fileId, input.workspaceId);
+        if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "File not found in this workspace" });
         return await runFileAnalysis(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "file", recordId: input.fileId, runType: `file_${input.analysisType}` },
           input.fileContent,
@@ -276,7 +286,9 @@ export const aiRouter = router({
     invoiceReview: protectedProcedure
       .input(z.object({ workspaceId: z.number(), invoiceId: z.number(), invoiceData: z.string(), contractContext: z.string().default("") }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+        await requireActiveWorkspace(ctx, input.workspaceId);
+        const invoice = await getInvoiceById(input.invoiceId, input.workspaceId);
+        if (!invoice) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found in this workspace" });
         return await runInvoiceReview(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "invoice", recordId: input.invoiceId, runType: "invoice_review" },
           input.invoiceData,
