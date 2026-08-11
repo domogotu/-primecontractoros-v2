@@ -1,0 +1,48 @@
+name: One-time loss review boundary repair
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  repair:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Repair loss review boundaries
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('server/entityRouters.ts')
+          t=p.read_text()
+          if 'import { getProposal, getContract } from "./db";' not in t:
+              t=t.replace('import { z } from "zod";\n','import { z } from "zod";\nimport { getProposal, getContract } from "./db";\n',1)
+          old='''    .mutation(async ({ ctx, input }) => {\n      const wsId = await requireWrite(ctx);\n      const { reviewDate, ...rest } = input;\n      try { await logAudit(wsId, ctx.user.id, "create", "lossReviews", 0, input); } catch {}\n      return createLossReview({\n        ...rest,\n        workspaceId: wsId,\n        reviewDate: reviewDate ? new Date(reviewDate) : undefined,\n      });\n    }),\n'''
+          new='''    .mutation(async ({ ctx, input }) => {\n      const wsId = await requireWrite(ctx);\n      const proposal = await getProposal(input.proposalId, wsId);\n      if (!proposal) throw new Error("Proposal not found in this workspace");\n      if (proposal.status !== "lost") throw new Error("Loss reviews can only be created for proposals marked Lost.");\n      const existingReviews = await listLossReviews(wsId);\n      if (existingReviews.some((review: any) => review.proposalId === input.proposalId)) throw new Error("A loss review already exists for this proposal.");\n      const { reviewDate, ...rest } = input;\n      try { await logAudit(wsId, ctx.user.id, "create", "lossReviews", 0, input); } catch {}\n      return createLossReview({ ...rest, workspaceId: wsId, reviewDate: reviewDate ? new Date(reviewDate) : undefined });\n    }),\n'''
+          if old not in t: raise SystemExit('loss review create anchor not found')
+          t=t.replace(old,new,1)
+          old='''    .mutation(async ({ ctx, input }) => {\n      const wsId = await requireWrite(ctx);\n      try { await logAudit(wsId, ctx.user.id, "create", "lessons", 0, input); } catch {}\n      return createLessonLearned({ ...input, workspaceId: wsId });\n    }),\n'''
+          new='''    .mutation(async ({ ctx, input }) => {\n      const wsId = await requireWrite(ctx);\n      if (input.contractId) { const contract = await getContract(input.contractId, wsId); if (!contract) throw new Error("Contract not found in this workspace"); }\n      if (input.proposalId) { const proposal = await getProposal(input.proposalId, wsId); if (!proposal) throw new Error("Proposal not found in this workspace"); }\n      try { await logAudit(wsId, ctx.user.id, "create", "lessons", 0, input); } catch {}\n      return createLessonLearned({ ...input, workspaceId: wsId });\n    }),\n'''
+          if old not in t: raise SystemExit('lessons create anchor not found')
+          t=t.replace(old,new,1)
+          p.write_text(t)
+          p=Path('client/src/pages/LossReview.tsx')
+          t=p.read_text()
+          t=t.replace('workspaceId: review.workspaceId || 1,','workspaceId: review.workspaceId,',1)
+          t=t.replace('''  const handleAnalyze = () => {\n    setLoading(true);\n''','''  const handleAnalyze = () => {\n    if (!review.workspaceId) { toast.error("Workspace context is missing for this loss review."); return; }\n    setLoading(true);\n''',1)
+          t=t.replace('const createLesson = trpc.lessons.create.useMutation({','const createLesson = trpc.lessonsLearnedV2.create.useMutation({',1)
+          t=t.replace('createLesson.mutate({ title, description, proposalId: review.proposalId })','createLesson.mutate({ title, description, proposalId: review.proposalId, lessonType: "proposal_loss", linkedRecordType: "proposal", linkedRecordId: review.proposalId, linkedRecordTitle: `Proposal #${review.proposalId}` })',1)
+          t=t.replace('''  const createMutation = trpc.lossReviews.create.useMutation({\n    onSuccess: () => { refetch(); setShowForm(false); setForm({ proposalId: "", reviewDate: "", reasonLost: "", competitorInfo: "", lessonsLearned: "", actionItems: "" }); toast.success("Loss review created"); },\n  });\n''','''  const createMutation = trpc.lossReviews.create.useMutation({\n    onSuccess: () => { refetch(); setShowForm(false); setForm({ proposalId: "", reviewDate: "", reasonLost: "", competitorInfo: "", lessonsLearned: "", actionItems: "" }); toast.success("Loss review created"); },\n    onError: (e: any) => toast.error(e.message || "Unable to create loss review"),\n  });\n''',1)
+          p.write_text(t)
+          PY
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/entityRouters.ts client/src/pages/LossReview.tsx
+          if git diff --cached --quiet; then echo 'No changes'; else git commit -m 'fix(lifecycle): harden loss review workspace boundaries'; git push origin HEAD:main; fi
