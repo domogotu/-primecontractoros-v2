@@ -1,0 +1,104 @@
+name: One-time AI record boundary hardening
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Harden AI record boundaries
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('server/aiRouter.ts')
+          t = p.read_text()
+
+          # Add workspace-scoped record getters used to prove that the referenced
+          # record belongs to the authenticated user's active workspace.
+          t = t.replace(
+              'import { getDb } from "./db";',
+              'import { getDb, getContract, getOpportunity, getProposal } from "./db";',
+              1,
+          )
+          t = t.replace(
+              '  createAlert,\n} from "./entityDb";',
+              '  createAlert,\n  getFileById,\n  getInvoiceById,\n} from "./entityDb";',
+              1,
+          )
+
+          replacements = [
+              (
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);\n        return await runContractScan(\n''',
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, input.workspaceId);\n        const contract = await getContract(input.contractId, input.workspaceId);\n        if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contract not found in this workspace" });\n        return await runContractScan(\n''',
+                  'contractScan',
+              ),
+              (
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);\n        return await runOpportunityReview(\n''',
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, input.workspaceId);\n        const opportunity = await getOpportunity(input.opportunityId, input.workspaceId);\n        if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found in this workspace" });\n        return await runOpportunityReview(\n''',
+                  'opportunityReview',
+              ),
+              (
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);\n        return await runProposalReview(\n''',
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, input.workspaceId);\n        const proposal = await getProposal(input.proposalId, input.workspaceId);\n        if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found in this workspace" });\n        return await runProposalReview(\n''',
+                  'proposalReview',
+              ),
+              (
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);\n        return await runFileAnalysis(\n''',
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, input.workspaceId);\n        const file = await getFileById(input.fileId, input.workspaceId);\n        if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "File not found in this workspace" });\n        return await runFileAnalysis(\n''',
+                  'fileAnalysis',
+              ),
+              (
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);\n        return await runInvoiceReview(\n''',
+                  '''      .mutation(async ({ ctx, input }) => {\n        await requireActiveWorkspace(ctx, input.workspaceId);\n        const invoice = await getInvoiceById(input.invoiceId, input.workspaceId);\n        if (!invoice) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found in this workspace" });\n        return await runInvoiceReview(\n''',
+                  'invoiceReview',
+              ),
+          ]
+
+          for old, new, name in replacements:
+              if new in t:
+                  continue
+              if old not in t:
+                  raise SystemExit(f'{name} anchor not found')
+              t = t.replace(old, new, 1)
+
+          p.write_text(t)
+
+          # Static regression guard: these checks fail the repair run if a future
+          # edit accidentally leaves one of the high-risk AI entry points unguarded.
+          required = [
+              'getContract(input.contractId, input.workspaceId)',
+              'getOpportunity(input.opportunityId, input.workspaceId)',
+              'getProposal(input.proposalId, input.workspaceId)',
+              'getFileById(input.fileId, input.workspaceId)',
+              'getInvoiceById(input.invoiceId, input.workspaceId)',
+          ]
+          current = p.read_text()
+          missing = [x for x in required if x not in current]
+          if missing:
+              raise SystemExit('Missing AI boundary guards: ' + ', '.join(missing))
+          PY
+
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/aiRouter.ts
+          if git diff --cached --quiet; then
+            echo 'No changes required.'
+          else
+            git commit -m 'fix(ai): enforce workspace ownership for analyzed records'
+            git push origin HEAD:main
+          fi
