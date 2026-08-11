@@ -1502,7 +1502,7 @@ export const lessonsLearnedRouter = router({
       whatDidNotWork: z.string().optional(),
       actionTaken: z.string().optional(),
       preventionSteps: z.string().optional(),
-      linkedRecordType: z.string().optional(),
+      linkedRecordType: z.enum(["contract", "proposal", "opportunity"]).optional(),
       linkedRecordId: z.number().optional(),
       linkedRecordTitle: z.string().optional(),
       status: z.enum(["draft", "active", "archived", "applied"]).optional(),
@@ -1513,6 +1513,10 @@ export const lessonsLearnedRouter = router({
       const workspaceId = await requireWorkspaceId(ctx.user.id);
       const db = await getDb();
       if (!db) throw new Error("Database not available");
+
+      if ((input.linkedRecordType && !input.linkedRecordId) || (!input.linkedRecordType && input.linkedRecordId)) {
+        throw new Error("Linked record type and linked record ID must be provided together.");
+      }
 
       if (input.contractId) {
         const [ownedContract] = await db.select({ id: contracts.id }).from(contracts)
@@ -1589,7 +1593,7 @@ export const lessonsLearnedRouter = router({
       whatDidNotWork: z.string().optional(),
       actionTaken: z.string().optional(),
       preventionSteps: z.string().optional(),
-      linkedRecordType: z.string().optional(),
+      linkedRecordType: z.enum(["contract", "proposal", "opportunity"]).optional(),
       linkedRecordId: z.number().nullable().optional(),
       linkedRecordTitle: z.string().nullable().optional(),
       status: z.enum(["draft", "active", "archived", "applied"]).optional(),
