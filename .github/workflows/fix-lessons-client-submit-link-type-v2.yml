@@ -1,0 +1,25 @@
+name: One-time lessons submit type repair
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Repair Lessons client types
+        shell: bash
+        run: |
+          python -c 'from pathlib import Path; p=Path("client/src/pages/LessonsLearned.tsx"); t=p.read_text(); t=t.replace("updateMutation.mutate({ id: editingLesson.id, ...formData, linkedRecordId: formData.linkedRecordId || undefined });", "updateMutation.mutate({ id: editingLesson.id, ...formData, linkedRecordType: formData.linkedRecordType || undefined, linkedRecordId: formData.linkedRecordId || undefined });"); t=t.replace("createMutation.mutate({ ...formData, linkedRecordId: formData.linkedRecordId || undefined });", "createMutation.mutate({ ...formData, linkedRecordType: formData.linkedRecordType || undefined, linkedRecordId: formData.linkedRecordId || undefined });"); t=t.replace("const val = v === \"none\" ? \"\" : v;", "const val = (v === \"none\" ? \"\" : v) as \"\" | \"contract\" | \"proposal\" | \"opportunity\";"); p.write_text(t)'
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add client/src/pages/LessonsLearned.tsx
+          if git diff --cached --quiet; then echo 'No changes'; else git commit -m 'fix(lessons): normalize linked record type on submit'; git push origin HEAD:main; fi
