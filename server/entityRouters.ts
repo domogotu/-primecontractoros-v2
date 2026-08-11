@@ -1,5 +1,6 @@
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
+import { getProposal, getContract } from "./db";
 import { requireWorkspaceId } from "./workspaceMiddleware";
 import { enforcePermission, enforceAction } from "./rbacMiddleware";
 import { logAudit } from "./featureRouter";
@@ -813,6 +814,8 @@ export const lessonsRouter = router({
     .input(z.object({ contractId: z.number().optional(), proposalId: z.number().optional(), title: z.string(), category: z.string().optional(), description: z.string().optional(), impact: z.string().optional(), recommendation: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const wsId = await requireWrite(ctx);
+      if (input.contractId) { const contract = await getContract(input.contractId, wsId); if (!contract) throw new Error("Contract not found in this workspace"); }
+      if (input.proposalId) { const proposal = await getProposal(input.proposalId, wsId); if (!proposal) throw new Error("Proposal not found in this workspace"); }
       try { await logAudit(wsId, ctx.user.id, "create", "lessons", 0, input); } catch {}
       return createLessonLearned({ ...input, workspaceId: wsId });
     }),
@@ -834,13 +837,14 @@ export const lossReviewsRouter = router({
     .input(z.object({ proposalId: z.number(), reviewDate: z.string().optional(), reasonLost: z.string().optional(), competitorInfo: z.string().optional(), lessonsLearned: z.string().optional(), actionItems: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const wsId = await requireWrite(ctx);
+      const proposal = await getProposal(input.proposalId, wsId);
+      if (!proposal) throw new Error("Proposal not found in this workspace");
+      if (proposal.status !== "lost") throw new Error("Loss reviews can only be created for proposals marked Lost.");
+      const existingReviews = await listLossReviews(wsId);
+      if (existingReviews.some((review: any) => review.proposalId === input.proposalId)) throw new Error("A loss review already exists for this proposal.");
       const { reviewDate, ...rest } = input;
       try { await logAudit(wsId, ctx.user.id, "create", "lossReviews", 0, input); } catch {}
-      return createLossReview({
-        ...rest,
-        workspaceId: wsId,
-        reviewDate: reviewDate ? new Date(reviewDate) : undefined,
-      });
+      return createLossReview({ ...rest, workspaceId: wsId, reviewDate: reviewDate ? new Date(reviewDate) : undefined });
     }),
   update: protectedProcedure
     .input(z.object({ id: z.number(), reasonLost: z.string().optional(), competitorInfo: z.string().optional(), lessonsLearned: z.string().optional(), actionItems: z.string().optional(), status: z.string().optional() }))
