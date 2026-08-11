@@ -84,7 +84,7 @@ export default function LessonsLearned() {
     whatDidNotWork: "",
     actionTaken: "",
     preventionSteps: "",
-    linkedRecordType: "",
+    linkedRecordType: "" as "" | "contract" | "proposal" | "opportunity",
     linkedRecordId: undefined as number | undefined,
     linkedRecordTitle: "",
     visibility: "workspace" as "workspace" | "team" | "private",
