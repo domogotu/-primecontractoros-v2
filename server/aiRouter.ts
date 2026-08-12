@@ -11,9 +11,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "./_core/trpc";
-import { TRPCError } from "@trpc/server";
-import { requireWorkspaceId } from "./workspaceMiddleware";
-import { getDb, getContract, getOpportunity, getProposal } from "./db";
+import { getDb } from "./db";
 import {
   aiRuns, aiFindings, aiSuggestions, aiExtractedObligations, aiUsageLogs, aiFindingHistory,
   type AiFinding, type AiExtractedObligation,
@@ -28,52 +26,9 @@ import {
   createComplianceItem,
   createContractRequirement,
   createAlert,
-  getFileById,
-  getInvoiceById,
 } from "./entityDb";
 import { logAudit } from "./featureRouter";
 import { invokeLLM } from "./_core/llm";
-
-async function requireActiveWorkspace(ctx: any, requestedWorkspaceId?: number): Promise<number> {
-  if (!ctx.user?.id) throw new TRPCError({ code: "UNAUTHORIZED" });
-  const workspaceId = await requireWorkspaceId(ctx.user.id);
-  if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== workspaceId) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Workspace access denied" });
-  }
-  return workspaceId;
-}
-
-async function requireAiRunInWorkspace(runId: number, workspaceId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [run] = await db.select().from(aiRuns).where(and(eq(aiRuns.id, runId), eq(aiRuns.workspaceId, workspaceId))).limit(1);
-  if (!run) throw new TRPCError({ code: "NOT_FOUND", message: "AI run not found" });
-  return run;
-}
-
-async function requireFindingInWorkspace(findingId: number, workspaceId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [finding] = await db.select().from(aiFindings).where(and(eq(aiFindings.id, findingId), eq(aiFindings.workspaceId, workspaceId))).limit(1);
-  if (!finding) throw new TRPCError({ code: "NOT_FOUND", message: "Finding not found" });
-  return finding;
-}
-
-async function requireSuggestionInWorkspace(suggestionId: number, workspaceId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [suggestion] = await db.select().from(aiSuggestions).where(and(eq(aiSuggestions.id, suggestionId), eq(aiSuggestions.workspaceId, workspaceId))).limit(1);
-  if (!suggestion) throw new TRPCError({ code: "NOT_FOUND", message: "Suggestion not found" });
-  return suggestion;
-}
-
-async function requireObligationInWorkspace(obligationId: number, workspaceId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [obligation] = await db.select().from(aiExtractedObligations).where(and(eq(aiExtractedObligations.id, obligationId), eq(aiExtractedObligations.workspaceId, workspaceId))).limit(1);
-  if (!obligation) throw new TRPCError({ code: "NOT_FOUND", message: "Obligation not found" });
-  return obligation;
-}
 
 // ============================================================
 // Conversion helpers — Phase 1
@@ -91,14 +46,6 @@ async function convertFindingToLiveRecord(
   const contractId = finding.contractId ?? undefined;
   const title = finding.title;
   const description = finding.summary || finding.practicalMeaning || undefined;
-
-  if (contractId) {
-    const contract = await getContract(contractId, workspaceId);
-    if (!contract) {
-      console.error("convertFindingToLiveRecord blocked cross-workspace or missing contract", { findingId: finding.id, contractId, workspaceId });
-      return null;
-    }
-  }
 
   try {
     switch (finding.findingType) {
@@ -164,18 +111,10 @@ async function convertObligationToLiveRecord(
   try {
     const db = await getDb();
     if (db) {
-      const [parentFinding] = await db.select().from(aiFindings).where(and(eq(aiFindings.id, obligation.findingId), eq(aiFindings.workspaceId, obligation.workspaceId)));
+      const [parentFinding] = await db.select().from(aiFindings).where(eq(aiFindings.id, obligation.findingId));
       contractId = parentFinding?.contractId ?? undefined;
     }
   } catch { /* contractId stays undefined */ }
-
-  if (contractId) {
-    const contract = await getContract(contractId, workspaceId);
-    if (!contract) {
-      console.error("convertObligationToLiveRecord blocked cross-workspace or missing contract", { obligationId: obligation.id, contractId, workspaceId });
-      return null;
-    }
-  }
 
   try {
     switch (obligation.obligationType) {
@@ -225,8 +164,7 @@ export const aiRouter = router({
   runs: router({
     list: protectedProcedure
       .input(z.object({ workspaceId: z.number(), limit: z.number().default(20), offset: z.number().default(0) }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const runs = await (await getDb())!.select().from(aiRuns)
           .where(eq(aiRuns.workspaceId, input.workspaceId))
           .orderBy(desc(aiRuns.createdAt))
@@ -238,12 +176,11 @@ export const aiRouter = router({
 
     get: protectedProcedure
       .input(z.object({ runId: z.number() }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const workspaceId = await requireActiveWorkspace(ctx);
-        const run = await requireAiRunInWorkspace(input.runId, workspaceId);
-        const findings = await (await getDb())!.select().from(aiFindings).where(and(eq(aiFindings.aiRunId, input.runId), eq(aiFindings.workspaceId, workspaceId)));
-        const suggestions = await (await getDb())!.select().from(aiSuggestions).where(and(eq(aiSuggestions.aiRunId, input.runId), eq(aiSuggestions.workspaceId, workspaceId)));
+      .query(async ({ input }) => {
+        const [run] = await (await getDb())!.select().from(aiRuns).where(eq(aiRuns.id, input.runId));
+        if (!run) throw new Error("AI run not found");
+        const findings = await (await getDb())!.select().from(aiFindings).where(eq(aiFindings.aiRunId, input.runId));
+        const suggestions = await (await getDb())!.select().from(aiSuggestions).where(eq(aiSuggestions.aiRunId, input.runId));
         return { run, findings, suggestions };
       }),
 
@@ -251,9 +188,6 @@ export const aiRouter = router({
     contractScan: protectedProcedure
       .input(z.object({ workspaceId: z.number(), contractId: z.number(), documentContent: z.string(), contractTitle: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, input.workspaceId);
-        const contract = await getContract(input.contractId, input.workspaceId);
-        if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contract not found in this workspace" });
         return await runContractScan(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "contract", recordId: input.contractId, runType: "contract_scan" },
           input.documentContent,
@@ -264,9 +198,6 @@ export const aiRouter = router({
     opportunityReview: protectedProcedure
       .input(z.object({ workspaceId: z.number(), opportunityId: z.number(), opportunityData: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, input.workspaceId);
-        const opportunity = await getOpportunity(input.opportunityId, input.workspaceId);
-        if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found in this workspace" });
         return await runOpportunityReview(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "opportunity", recordId: input.opportunityId, runType: "opportunity_review" },
           input.opportunityData
@@ -276,9 +207,6 @@ export const aiRouter = router({
     proposalReview: protectedProcedure
       .input(z.object({ workspaceId: z.number(), proposalId: z.number(), proposalData: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, input.workspaceId);
-        const proposal = await getProposal(input.proposalId, input.workspaceId);
-        if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found in this workspace" });
         return await runProposalReview(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "proposal", recordId: input.proposalId, runType: "proposal_review" },
           input.proposalData
@@ -288,9 +216,6 @@ export const aiRouter = router({
     fileAnalysis: protectedProcedure
       .input(z.object({ workspaceId: z.number(), fileId: z.number(), fileContent: z.string(), fileName: z.string(), analysisType: z.string().default("analyze") }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, input.workspaceId);
-        const file = await getFileById(input.fileId, input.workspaceId);
-        if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "File not found in this workspace" });
         return await runFileAnalysis(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "file", recordId: input.fileId, runType: `file_${input.analysisType}` },
           input.fileContent,
@@ -302,9 +227,6 @@ export const aiRouter = router({
     invoiceReview: protectedProcedure
       .input(z.object({ workspaceId: z.number(), invoiceId: z.number(), invoiceData: z.string(), contractContext: z.string().default("") }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, input.workspaceId);
-        const invoice = await getInvoiceById(input.invoiceId, input.workspaceId);
-        if (!invoice) throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found in this workspace" });
         return await runInvoiceReview(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "invoice", recordId: input.invoiceId, runType: "invoice_review" },
           input.invoiceData,
@@ -315,7 +237,6 @@ export const aiRouter = router({
     workspaceSummary: protectedProcedure
       .input(z.object({ workspaceId: z.number(), workspaceData: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         return await runWorkspaceSummary(
           { workspaceId: input.workspaceId, userId: ctx.user.id, recordType: "workspace", recordId: input.workspaceId, runType: "workspace_summary" },
           input.workspaceData
@@ -334,8 +255,7 @@ export const aiRouter = router({
         limit: z.number().default(50),
         offset: z.number().default(0),
       }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const conditions = [eq(aiFindings.workspaceId, input.workspaceId)];
         if (input.reviewState) {
           conditions.push(eq(aiFindings.reviewState, input.reviewState as any));
@@ -351,11 +271,10 @@ export const aiRouter = router({
 
     get: protectedProcedure
       .input(z.object({ findingId: z.number() }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const workspaceId = await requireActiveWorkspace(ctx);
-        const finding = await requireFindingInWorkspace(input.findingId, workspaceId);
-        const obligations = await (await getDb())!.select().from(aiExtractedObligations).where(and(eq(aiExtractedObligations.findingId, input.findingId), eq(aiExtractedObligations.workspaceId, workspaceId)));
+      .query(async ({ input }) => {
+        const [finding] = await (await getDb())!.select().from(aiFindings).where(eq(aiFindings.id, input.findingId));
+        if (!finding) throw new Error("Finding not found");
+        const obligations = await (await getDb())!.select().from(aiExtractedObligations).where(eq(aiExtractedObligations.findingId, input.findingId));
         return { finding, obligations };
       }),
 
@@ -366,10 +285,9 @@ export const aiRouter = router({
         reason: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
-        const workspaceId = await requireActiveWorkspace(ctx);
-        const finding = await requireFindingInWorkspace(input.findingId, workspaceId);
+        const [finding] = await db!.select().from(aiFindings).where(eq(aiFindings.id, input.findingId));
+        if (!finding) throw new Error("Finding not found");
 
         const oldState = finding.reviewState;
 
@@ -390,18 +308,13 @@ export const aiRouter = router({
           updateData.reviewedBy = ctx.user.id;
           updateData.reviewedAt = new Date();
 
-          // Create the live downstream record only once. Re-approval is idempotent.
-          if (finding.approvedLiveObjectId && finding.approvedLiveObjectType) {
-            createdRecordType = finding.approvedLiveObjectType;
-            createdRecordId = finding.approvedLiveObjectId;
-          } else {
-            const result = await convertFindingToLiveRecord(finding, ctx.user.id);
-            if (result) {
-              createdRecordType = result.recordType;
-              createdRecordId = result.recordId;
-              updateData.approvedLiveObjectType = result.recordType;
-              updateData.approvedLiveObjectId = result.recordId;
-            }
+          // Phase 1: Create the live downstream record
+          const result = await convertFindingToLiveRecord(finding, ctx.user.id);
+          if (result) {
+            createdRecordType = result.recordType;
+            createdRecordId = result.recordId;
+            updateData.approvedLiveObjectType = result.recordType;
+            updateData.approvedLiveObjectId = result.recordId;
           }
 
           try {
@@ -411,21 +324,19 @@ export const aiRouter = router({
           } catch {}
         }
 
-        await db!.update(aiFindings).set(updateData).where(and(eq(aiFindings.id, input.findingId), eq(aiFindings.workspaceId, workspaceId)));
+        await db!.update(aiFindings).set(updateData).where(eq(aiFindings.id, input.findingId));
         return { success: true, oldState, newState: input.newState, createdRecordType, createdRecordId };
       }),
 
     bulkApprove: protectedProcedure
       .input(z.object({ findingIds: z.array(z.number()) }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
-        const workspaceId = await requireActiveWorkspace(ctx);
         const results: Array<{ findingId: number; recordType: string | null; recordId: number | null }> = [];
 
         for (const id of input.findingIds) {
-          let finding;
-          try { finding = await requireFindingInWorkspace(id, workspaceId); } catch { continue; }
+          const [finding] = await db!.select().from(aiFindings).where(eq(aiFindings.id, id));
+          if (!finding) continue;
 
           await db!.insert(aiFindingHistory).values({
             findingId: id,
@@ -439,21 +350,16 @@ export const aiRouter = router({
           let createdRecordType: string | null = null;
           let createdRecordId: number | null = null;
 
-          // Create the live downstream record only once. Bulk re-approval is idempotent.
-          if (finding.approvedLiveObjectId && finding.approvedLiveObjectType) {
-            createdRecordType = finding.approvedLiveObjectType;
-            createdRecordId = finding.approvedLiveObjectId;
-          } else {
-            const result = await convertFindingToLiveRecord(finding, ctx.user.id);
-            if (result) {
-              createdRecordType = result.recordType;
-              createdRecordId = result.recordId;
-              updateData.approvedLiveObjectType = result.recordType;
-              updateData.approvedLiveObjectId = result.recordId;
-            }
+          // Phase 1: Create the live downstream record
+          const result = await convertFindingToLiveRecord(finding, ctx.user.id);
+          if (result) {
+            createdRecordType = result.recordType;
+            createdRecordId = result.recordId;
+            updateData.approvedLiveObjectType = result.recordType;
+            updateData.approvedLiveObjectId = result.recordId;
           }
 
-          await db!.update(aiFindings).set(updateData).where(and(eq(aiFindings.id, id), eq(aiFindings.workspaceId, workspaceId)));
+          await db!.update(aiFindings).set(updateData).where(eq(aiFindings.id, id));
 
           try {
             await logAudit(finding.workspaceId, ctx.user.id, "update", "aiFinding", id, {
@@ -469,11 +375,8 @@ export const aiRouter = router({
 
     markStale: protectedProcedure
       .input(z.object({ runId: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const workspaceId = await requireActiveWorkspace(ctx);
-        await requireAiRunInWorkspace(input.runId, workspaceId);
-        await (await getDb())!.update(aiFindings).set({ staleStatus: "stale" }).where(and(eq(aiFindings.aiRunId, input.runId), eq(aiFindings.workspaceId, workspaceId)));
+      .mutation(async ({ input }) => {
+        await (await getDb())!.update(aiFindings).set({ staleStatus: "stale" }).where(eq(aiFindings.aiRunId, input.runId));
         return { success: true };
       }),
   }),
@@ -489,8 +392,7 @@ export const aiRouter = router({
         limit: z.number().default(50),
         offset: z.number().default(0),
       }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const conditions = [eq(aiSuggestions.workspaceId, input.workspaceId)];
         if (input.status) {
           conditions.push(eq(aiSuggestions.status, input.status as any));
@@ -509,14 +411,11 @@ export const aiRouter = router({
         suggestionId: z.number(),
         status: z.enum(["new", "acknowledged", "accepted", "dismissed", "completed"]),
       }))
-      .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const workspaceId = await requireActiveWorkspace(ctx);
-        await requireSuggestionInWorkspace(input.suggestionId, workspaceId);
+      .mutation(async ({ input }) => {
         const updateData: any = { status: input.status };
         if (input.status === "accepted") updateData.acceptedAt = new Date();
         if (input.status === "dismissed") updateData.dismissedAt = new Date();
-        await (await getDb())!.update(aiSuggestions).set(updateData).where(and(eq(aiSuggestions.id, input.suggestionId), eq(aiSuggestions.workspaceId, workspaceId)));
+        await (await getDb())!.update(aiSuggestions).set(updateData).where(eq(aiSuggestions.id, input.suggestionId));
         return { success: true };
       }),
   }),
@@ -532,8 +431,7 @@ export const aiRouter = router({
         limit: z.number().default(50),
         offset: z.number().default(0),
       }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const conditions = [eq(aiExtractedObligations.workspaceId, input.workspaceId)];
         if (input.approvalState) {
           conditions.push(eq(aiExtractedObligations.approvalState, input.approvalState as any));
@@ -550,27 +448,24 @@ export const aiRouter = router({
     approve: protectedProcedure
       .input(z.object({ obligationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
-        const workspaceId = await requireActiveWorkspace(ctx);
-        const obligation = await requireObligationInWorkspace(input.obligationId, workspaceId);
+        const [obligation] = await db!.select().from(aiExtractedObligations).where(eq(aiExtractedObligations.id, input.obligationId));
+        if (!obligation) throw new Error("Obligation not found");
 
-        // Create the live downstream record only once. Re-approval is idempotent.
-        const result = obligation.createdRecordId && obligation.createdRecordType
-          ? { recordType: obligation.createdRecordType, recordId: obligation.createdRecordId }
-          : await convertObligationToLiveRecord(obligation, ctx.user.id);
+        // Phase 1: Create the live downstream record
+        const result = await convertObligationToLiveRecord(obligation, ctx.user.id);
 
         const updateData: any = {
           approvalState: "approved",
           approvedBy: ctx.user.id,
           approvedAt: new Date(),
         };
-        if (result && !obligation.createdRecordId) {
+        if (result) {
           updateData.createdRecordType = result.recordType;
           updateData.createdRecordId = result.recordId;
         }
 
-        await db!.update(aiExtractedObligations).set(updateData).where(and(eq(aiExtractedObligations.id, input.obligationId), eq(aiExtractedObligations.workspaceId, workspaceId)));
+        await db!.update(aiExtractedObligations).set(updateData).where(eq(aiExtractedObligations.id, input.obligationId));
 
         try {
           await logAudit(obligation.workspaceId, ctx.user.id, "update", "aiObligation", input.obligationId, {
@@ -583,40 +478,33 @@ export const aiRouter = router({
 
     reject: protectedProcedure
       .input(z.object({ obligationId: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const workspaceId = await requireActiveWorkspace(ctx);
-        await requireObligationInWorkspace(input.obligationId, workspaceId);
+      .mutation(async ({ input }) => {
         await (await getDb())!.update(aiExtractedObligations).set({
           approvalState: "rejected",
-        }).where(and(eq(aiExtractedObligations.id, input.obligationId), eq(aiExtractedObligations.workspaceId, workspaceId)));
+        }).where(eq(aiExtractedObligations.id, input.obligationId));
         return { success: true };
       }),
 
     bulkApprove: protectedProcedure
       .input(z.object({ obligationIds: z.array(z.number()) }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
-        const workspaceId = await requireActiveWorkspace(ctx);
         const results: Array<{ obligationId: number; recordType: string | null; recordId: number | null }> = [];
 
         for (const id of input.obligationIds) {
-          let obligation;
-          try { obligation = await requireObligationInWorkspace(id, workspaceId); } catch { continue; }
+          const [obligation] = await db!.select().from(aiExtractedObligations).where(eq(aiExtractedObligations.id, id));
+          if (!obligation) continue;
 
-          // Create the live downstream record only once. Bulk re-approval is idempotent.
-          const result = obligation.createdRecordId && obligation.createdRecordType
-            ? { recordType: obligation.createdRecordType, recordId: obligation.createdRecordId }
-            : await convertObligationToLiveRecord(obligation, ctx.user.id);
+          // Phase 1: Create the live downstream record
+          const result = await convertObligationToLiveRecord(obligation, ctx.user.id);
 
           const updateData: any = { approvalState: "approved", approvedBy: ctx.user.id, approvedAt: new Date() };
-          if (result && !obligation.createdRecordId) {
+          if (result) {
             updateData.createdRecordType = result.recordType;
             updateData.createdRecordId = result.recordId;
           }
 
-          await db!.update(aiExtractedObligations).set(updateData).where(and(eq(aiExtractedObligations.id, id), eq(aiExtractedObligations.workspaceId, workspaceId)));
+          await db!.update(aiExtractedObligations).set(updateData).where(eq(aiExtractedObligations.id, id));
 
           try {
             await logAudit(obligation.workspaceId, ctx.user.id, "update", "aiObligation", id, {
@@ -637,8 +525,7 @@ export const aiRouter = router({
   usage: router({
     summary: protectedProcedure
       .input(z.object({ workspaceId: z.number() }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const logs = await (await getDb())!.select().from(aiUsageLogs)
           .where(eq(aiUsageLogs.workspaceId, input.workspaceId))
           .orderBy(desc(aiUsageLogs.createdAt))
@@ -663,8 +550,7 @@ export const aiRouter = router({
       companyName: z.string().optional(),
       companyContext: z.string().optional(),
     }))
-    .mutation(async ({ ctx, input }) => {
-      await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+    .mutation(async ({ input }) => {
       const prompt = `You are a government contracting expert helping a small business fill out their business profile for federal contracting.
 
 Field: ${input.fieldName}

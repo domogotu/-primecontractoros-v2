@@ -528,7 +528,7 @@ export async function getInvoiceStatusHistory(invoiceId: number) {
 }
 
 // ==================== CONTACT LINKS ====================
-export async function createContactLink(data: { workspaceId: number; contactId: number; recordType: string; recordId: number; role?: string }) {
+export async function createContactLink(data: { contactId: number; linkedRecordType: string; linkedRecordId: number; role?: string }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const { contactLinks } = await import("../drizzle/schema");
@@ -536,11 +536,11 @@ export async function createContactLink(data: { workspaceId: number; contactId: 
   return { id: result[0].insertId };
 }
 
-export async function getContactLinksForRecord(workspaceId: number, recordType: string, recordId: number) {
+export async function getContactLinksForRecord(linkedRecordType: string, linkedRecordId: number) {
   const db = await getDb();
   if (!db) return [];
   const { contactLinks } = await import("../drizzle/schema");
-  return db.select().from(contactLinks).where(and(eq(contactLinks.workspaceId, workspaceId), eq(contactLinks.recordType, recordType), eq(contactLinks.recordId, recordId)));
+  return db.select().from(contactLinks).where(and(eq(contactLinks.recordType, linkedRecordType), eq(contactLinks.recordId, linkedRecordId)));
 }
 
 // ==================== FOLLOWUPS ====================
@@ -627,11 +627,11 @@ export async function createFileVersion(data: { fileId: number; workspaceId?: nu
   return { id: result[0].insertId };
 }
 
-export async function listFileVersions(fileId: number, workspaceId: number) {
+export async function listFileVersions(fileId: number) {
   const db = await getDb();
   if (!db) return [];
   const { fileVersions } = await import("../drizzle/schema");
-  return db.select().from(fileVersions).where(and(eq(fileVersions.fileId, fileId), eq(fileVersions.workspaceId, workspaceId))).orderBy(fileVersions.versionNumber);
+  return db.select().from(fileVersions).where(eq(fileVersions.fileId, fileId)).orderBy(fileVersions.versionNumber);
 }
 
 export async function listAllFileVersionsForWorkspace(workspaceId: number) {

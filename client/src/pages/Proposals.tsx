@@ -32,14 +32,9 @@ export default function Proposals() {
 
   const { data: proposals = [], isLoading } = trpc.proposals.list.useQuery();
 
-  const normalizedSearch = searchTerm.trim().toLowerCase();
-  const filteredProposals = proposals.filter((p) => {
-    if (!normalizedSearch) return true;
-    const title = p.title.toLowerCase();
-    const status = (p.status || 'draft').toLowerCase();
-    const readableStatus = status.replace(/_/g, ' ');
-    return title.includes(normalizedSearch) || status.includes(normalizedSearch) || readableStatus.includes(normalizedSearch);
-  });
+  const filteredProposals = proposals.filter((p) =>
+    p.title.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const statusColors: Record<string, string> = {
     draft: "bg-gray-100 text-gray-800",

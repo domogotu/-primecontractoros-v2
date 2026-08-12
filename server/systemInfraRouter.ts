@@ -13,8 +13,6 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "./_core/trpc";
-import { TRPCError } from "@trpc/server";
-import { requireWorkspaceId } from "./workspaceMiddleware";
 import { getDb } from "./db";
 import { auditLogs, notifications, systemErrors, workspaceRoles, contracts, opportunities, proposals, tasks, invoices, files, aiFindings, supportTickets } from "../drizzle/schema";
 import { eq, desc, and, like, or, count, sql } from "drizzle-orm";
@@ -57,25 +55,6 @@ export async function createNotification(params: {
   await db.insert(notifications).values(params);
 }
 
-async function requireActiveWorkspace(ctx: any, requestedWorkspaceId?: number): Promise<number> {
-  if (!ctx.user?.id) throw new TRPCError({ code: "UNAUTHORIZED" });
-  const workspaceId = await requireWorkspaceId(ctx.user.id);
-  if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== workspaceId) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Workspace access denied" });
-  }
-  return workspaceId;
-}
-
-async function requireSupportTicketInWorkspace(ticketId: number, workspaceId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const [ticket] = await db.select().from(supportTickets)
-    .where(and(eq(supportTickets.id, ticketId), eq(supportTickets.workspaceId, workspaceId)))
-    .limit(1);
-  if (!ticket) throw new TRPCError({ code: "NOT_FOUND", message: "Support ticket not found" });
-  return ticket;
-}
-
 export const systemInfraRouter = router({
   // ============================================================
   // Audit Logs
@@ -89,8 +68,7 @@ export const systemInfraRouter = router({
         limit: z.number().default(50),
         offset: z.number().default(0),
       }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const db = await getDb();
         if (!db) return { logs: [], total: 0 };
         const conditions = [eq(auditLogs.workspaceId, input.workspaceId)];
@@ -116,8 +94,7 @@ export const systemInfraRouter = router({
         unreadOnly: z.boolean().default(false),
         limit: z.number().default(30),
       }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const db = await getDb();
         if (!db) return { notifications: [], unreadCount: 0 };
         const conditions: any[] = [eq(notifications.workspaceId, input.workspaceId)];
@@ -133,19 +110,16 @@ export const systemInfraRouter = router({
 
     markRead: protectedProcedure
       .input(z.object({ notificationId: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) return { success: false };
-        const tenantWorkspaceId = await requireActiveWorkspace(ctx);
-        await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, tenantWorkspaceId)));
+        await db.update(notifications).set({ isRead: true }).where(eq(notifications.id, input.notificationId));
         return { success: true };
       }),
 
     markAllRead: protectedProcedure
       .input(z.object({ workspaceId: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) return { success: false };
         await db.update(notifications).set({ isRead: true }).where(eq(notifications.workspaceId, input.workspaceId));
@@ -154,12 +128,10 @@ export const systemInfraRouter = router({
 
     dismiss: protectedProcedure
       .input(z.object({ notificationId: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) return { success: false };
-        const tenantWorkspaceId = await requireActiveWorkspace(ctx);
-        await db.update(notifications).set({ dismissedAt: new Date() }).where(and(eq(notifications.id, input.notificationId), eq(notifications.workspaceId, tenantWorkspaceId)));
+        await db.update(notifications).set({ dismissedAt: new Date() }).where(eq(notifications.id, input.notificationId));
         return { success: true };
       }),
   }),
@@ -174,8 +146,7 @@ export const systemInfraRouter = router({
         term: z.string().min(1),
         types: z.array(z.string()).optional(), // filter to specific types
       }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const db = await getDb();
         if (!db) return { results: [] };
         const searchTerm = `%${input.term}%`;
@@ -231,8 +202,7 @@ export const systemInfraRouter = router({
   health: router({
     contractScore: protectedProcedure
       .input(z.object({ contractId: z.number(), workspaceId: z.number() }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const db = await getDb();
         if (!db) return { score: 0, factors: [] };
 
@@ -290,8 +260,7 @@ export const systemInfraRouter = router({
 
     workspaceOverview: protectedProcedure
       .input(z.object({ workspaceId: z.number() }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const db = await getDb();
         if (!db) return { contracts: [], averageScore: 0 };
 
@@ -325,7 +294,6 @@ export const systemInfraRouter = router({
         workspaceId: z.number(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return { success: false };
 
@@ -362,7 +330,6 @@ export const systemInfraRouter = router({
         workspaceId: z.number(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return { success: false };
 
@@ -405,7 +372,6 @@ export const systemInfraRouter = router({
         stackTrace: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return { success: false };
         await db.insert(systemErrors).values({
@@ -432,7 +398,6 @@ export const systemInfraRouter = router({
         }).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return { success: false, data: "" };
         const tableMap: Record<string, any> = {
@@ -477,8 +442,7 @@ export const systemInfraRouter = router({
         csvContent: z.string(),
         recordType: z.enum(["contact", "opportunity", "contract", "invoice"]),
       }))
-      .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .mutation(async ({ input }) => {
         const lines = input.csvContent.trim().split("\n");
         if (lines.length < 2) return { headers: [] as string[], rows: [] as Record<string, string>[], totalRows: 0 };
         const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
@@ -498,7 +462,6 @@ export const systemInfraRouter = router({
         fieldMapping: z.record(z.string(), z.string()),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return { success: false, imported: 0 };
         const lines = input.csvContent.trim().split("\n");
@@ -543,8 +506,7 @@ export const systemInfraRouter = router({
   aiControls: router({
     getSettings: protectedProcedure
       .input(z.object({ workspaceId: z.number() }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         return {
           enabled: true,
           monthlyCapUsd: 50.00,
@@ -562,7 +524,6 @@ export const systemInfraRouter = router({
         maxRunsPerDay: z.number().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         await logAuditEvent({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
@@ -581,8 +542,7 @@ export const systemInfraRouter = router({
   workspaceCompleteness: router({
     getScore: protectedProcedure
       .input(z.object({ workspaceId: z.number() }))
-      .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
+      .query(async ({ input }) => {
         const db = await getDb();
         if (!db) return { score: 0, total: 8, completed: 0, items: [] };
         const items: { name: string; complete: boolean; weight: number }[] = [];
@@ -618,12 +578,11 @@ export const systemInfraRouter = router({
     list: protectedProcedure
       .input(z.object({ workspaceId: z.number().optional(), status: z.string().optional() }).optional())
       .query(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return [];
-        const tenantWorkspaceId = await requireActiveWorkspace(ctx, input?.workspaceId);
-        const conditions: any[] = [eq(supportTickets.workspaceId, tenantWorkspaceId)];
-                if (input?.status) conditions.push(eq(supportTickets.status, input.status as any));
+        const conditions: any[] = [];
+        if (input?.workspaceId) conditions.push(eq(supportTickets.workspaceId, input.workspaceId));
+        if (input?.status) conditions.push(eq(supportTickets.status, input.status as any));
         return db.select().from(supportTickets)
           .where(conditions.length > 0 ? and(...conditions) : undefined)
           .orderBy(desc(supportTickets.createdAt))
@@ -637,7 +596,6 @@ export const systemInfraRouter = router({
         priority: z.enum(["low", "medium", "high", "critical"]).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return { success: false };
         await db.insert(supportTickets).values({
@@ -660,15 +618,12 @@ export const systemInfraRouter = router({
         resolution: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
         const db = await getDb();
         if (!db) return { success: false };
-        const tenantWorkspaceId = await requireActiveWorkspace(ctx);
-        await requireSupportTicketInWorkspace(input.id, tenantWorkspaceId);
         const updateData: any = { status: input.status };
         if (input.resolution) updateData.resolution = input.resolution;
         if (input.status === "resolved" || input.status === "closed") updateData.resolvedAt = new Date();
-        await db.update(supportTickets).set(updateData).where(and(eq(supportTickets.id, input.id), eq(supportTickets.workspaceId, tenantWorkspaceId)));
+        await db.update(supportTickets).set(updateData).where(eq(supportTickets.id, input.id));
         return { success: true };
       }),
     addNote: protectedProcedure
@@ -678,11 +633,8 @@ export const systemInfraRouter = router({
         isInternal: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const tenantWorkspaceId = await requireActiveWorkspace(ctx);
-        await requireSupportTicketInWorkspace(input.ticketId, tenantWorkspaceId);
         await logAuditEvent({
-          workspaceId: tenantWorkspaceId,
+          workspaceId: 0,
           userId: ctx.user.id,
           actionType: "note",
           targetType: "support_ticket",
