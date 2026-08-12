@@ -194,7 +194,18 @@ export default function LessonsLearned() {
       return;
     }
     if (editingLesson) {
-      updateMutation.mutate({ id: editingLesson.id, ...formData, linkedRecordType: formData.linkedRecordType || undefined, linkedRecordId: formData.linkedRecordId || undefined });
+      const linkUpdate = formData.linkedRecordType && formData.linkedRecordId
+        ? {
+            linkedRecordType: formData.linkedRecordType,
+            linkedRecordId: formData.linkedRecordId,
+            linkedRecordTitle: formData.linkedRecordTitle || null,
+          }
+        : {
+            linkedRecordType: null,
+            linkedRecordId: null,
+            linkedRecordTitle: null,
+          };
+      updateMutation.mutate({ id: editingLesson.id, ...formData, ...linkUpdate });
     } else {
       createMutation.mutate({ ...formData, linkedRecordType: formData.linkedRecordType || undefined, linkedRecordId: formData.linkedRecordId || undefined });
     }
