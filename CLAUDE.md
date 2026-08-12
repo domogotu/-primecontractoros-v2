@@ -136,9 +136,9 @@ For Unified AI Ecosystem work:
 
 **Do not report PrimeContractorOS repository-wide build failures as failures of the Unified AI Ecosystem.**
 
-The current repository does **not** contain a complete runnable PrimeContractorOS mirror. As of the last check it contains only three PrimeContractorOS source files (`drizzle/schema.ts`, `server/platformAdminRouter.ts`, `client/src/pages/PlatformOnboarding.tsx`) plus documentation — their dependencies are not present, so commands such as `pnpm test` and `tsc` may therefore fail for reasons entirely unrelated to Unified AI Ecosystem work.
+As of the last full repository audit (see "Codebase Structure & Development Workflow" under WORKSTREAM A below), the repository now contains a complete, buildable PrimeContractorOS application (`client/`, `server/`, `drizzle/` with a full schema and migration history, ~90 tRPC sub-routers, ~116 pages) — the earlier state of only three PrimeContractorOS source files no longer applies and should not be assumed. Even so, `pnpm test`, `pnpm check`, and `pnpm build` for PrimeContractorOS require a live `DATABASE_URL` (MySQL/TiDB) and other env vars from `server/_core/env.ts` (see `.github/workflows/main-code-validation.yml` for the exact set used in CI); a failure caused by a missing/misconfigured environment in an ecosystem-focused session is still not evidence of an Unified AI Ecosystem defect.
 
-When that occurs, state:
+When a PrimeContractorOS-side failure genuinely appears unrelated to the Unified AI Ecosystem batch, state:
 
 > "Repository-wide PrimeContractorOS validation is unavailable/incomplete and is not being used as the acceptance test for this Unified AI Ecosystem batch."
 
@@ -309,6 +309,50 @@ No workflow should require unnecessary re-entry of information.
 
 Implement and strengthen: AI Orchestrator, Knowledge Graph, Carry Forward Engine, Organizational Memory, Opportunity Intelligence, Proposal Intelligence, Contract Intelligence, Finance Intelligence, Vendor Intelligence, Compliance Intelligence. Full spec for the two currently-implemented AI types (Guidance AI and Source-Linked Analysis AI) is in `docs/MASTER_SPECIFICATION.md` §8.
 
+## Codebase Structure & Development Workflow
+
+*This section is code-verified against the current repository state and supersedes any older claims elsewhere about the repo being a documentation-only mirror.*
+
+### Development Commands
+
+- Install: `pnpm install` (package manager is pinned via `packageManager` in `package.json`; a `patches/wouter@3.7.1.patch` is applied automatically through pnpm's `patchedDependencies`).
+- Dev server: `pnpm dev` — runs `tsx watch server/_core/index.ts`. This single Express process serves the tRPC API **and** proxies the Vite dev server for the client (`server/_core/vite.ts`); there is no separate frontend dev server to start.
+- Typecheck: `pnpm check` (`tsc --noEmit`).
+- Format: `pnpm format` (`prettier --write .`).
+- Test: `pnpm test` (`vitest run`). Run a single file with `pnpm vitest run server/crud.test.ts`; run by test name with `pnpm vitest run -t "<name>"`.
+- Build: `pnpm build` — `vite build` (client → `dist/public`) then `esbuild` bundles `server/_core/index.ts` → `dist/index.js`. Run with `pnpm start` (`NODE_ENV=production node dist/index.js`).
+- DB schema changes: edit `drizzle/schema.ts`, then `pnpm db:push` (`drizzle-kit generate` + `drizzle-kit migrate`) against `DATABASE_URL`. Never hand-edit the generated files under `drizzle/*.sql` or `drizzle/meta/`.
+- DB seed: `pnpm db:seed` (`node seed-db.mjs`); `seed-demo.mjs` seeds a larger demo dataset (run directly with `node seed-demo.mjs`, not wired to a package script).
+- CI (`.github/workflows/main-code-validation.yml`, `v2-baseline-validation.yml`) runs, in order, against a real ephemeral MySQL 8.4 service: `pnpm install --frozen-lockfile` → `pnpm db:push` → `pnpm check` → `pnpm test` → `pnpm build`. Match this sequence locally before assuming a change is safe to push.
+
+### System Architecture
+
+**Stack:** React 19 + Vite + wouter (client-side routing) + TanStack Query + tRPC client on the frontend; Express + tRPC server + Drizzle ORM against MySQL/TiDB on the backend. Styling is Tailwind v4 + shadcn/ui (`components.json`, `client/src/components/ui`).
+
+**Server entry (`server/_core/index.ts`):** boots Express, validates required production env vars (`validateProductionCoreEnv`), mounts security headers and rate limiting (`server/middleware/security.ts`), registers the Stripe webhook route **before** the JSON body parser (needs the raw body), registers OAuth routes and the storage proxy, mounts the single tRPC router at `/api/trpc`, then either hands off to Vite middleware (dev) or serves the built static client (prod).
+
+**tRPC router (`server/routers.ts`):** one `appRouter` aggregates ~90 sub-routers imported from domain-specific files (`entityRouters.ts`, `featureRouter.ts`, `platformRouter.ts`, `platformAdminRouter.ts`, `platformBusinessRouter.ts`, `integrationsRouter.ts`, `batch1Router.ts`…`batch4Router.ts`, `phase35Router.ts`, `contractOperationsRouter.ts`, `financeCloseoutRouter.ts`, etc.). The `batchN`/`phaseN` file names record *when* a router was added during the migration, not an architectural layer — treat each as a plain domain grouping. Procedures come in three flavors defined in `server/_core/trpc.ts`: `publicProcedure`, `protectedProcedure` (requires `ctx.user`), and `adminProcedure` (requires `ctx.user.role === "admin"`). `server/_core/context.ts` resolves `ctx.user` on every request via `sdk.authenticateRequest` against Manus OAuth; auth failures degrade to `user: null` rather than throwing, so public procedures keep working.
+
+**Workspace isolation & RBAC:** almost every table carries a `workspaceId`. `server/workspaceMiddleware.ts` resolves a user's workspace (owned, or via `workspaceMembers`) and exposes `requireWorkspaceId(userId)`; `server/rbacMiddleware.ts`'s `enforcePermission(userId, "read"|"write"|"delete"|"manage_users"|"manage_settings")` and `enforceAction(userId, action)` (fine-grained actions defined in `server/permissions.ts`, e.g. `manage_contracts`, `manage_invoices`) gate mutations by workspace role (`owner`/`admin`/`contract_manager`/`finance_user`/`member`/`viewer`) and return the resolved `wsId` to use in the query. **Every query re-derives `wsId` server-side from `ctx.user.id`; a client-supplied workspace id is never trusted.** New procedures should follow this exact pattern rather than inlining ad hoc role checks.
+
+**Data access:** `server/db.ts` and `server/entityDb.ts` hold hand-written Drizzle query functions (create/get/list/update/delete per entity) that routers call into; newer routers (e.g. `entityRouters.ts`) also inline `db.select().from(...)` directly — both styles coexist, follow whichever the surrounding router already uses. `drizzle/schema.ts` (~2,500 lines) is the single source of truth for every table; `drizzle/relations.ts` defines `relations()`. Migrations are the numbered `.sql` files in `drizzle/` plus matching `drizzle/meta/*_snapshot.json`, generated by `drizzle-kit` — regenerate via `pnpm db:push`, never write them by hand.
+
+**Lifecycle carry-forward:** `opportunities.convertToProposal` and `proposals.convertToContract` in `server/routers.ts` are the canonical implementation of the "no re-entry" lifecycle rule (Government Contracting Workflow, above). Each: looks for an existing linked record before creating a new one (idempotent — safe to call twice), copies contacts/files/notes/tasks forward via `contactLinks`/`fileLinks`, writes `sourceReferences` rows for provenance, records `autoPopulationEvents` and `lifecycleStatusHistory`, and only then advances the source record's status. Model any new lifecycle transition on this pattern.
+
+**AI:** `server/aiEngine.ts`, `server/aiRouter.ts`, and `server/services/guidanceEngine.ts` implement the two live AI types from `docs/MASTER_SPECIFICATION.md` §8 (Guidance AI, Source-Linked Analysis AI). `server/_core/llm.ts`'s `invokeLLM` is the only LLM call surface — route new AI features through it rather than calling a provider SDK directly. AI output is always persisted as an `aiRuns`/`aiSuggestions` row for human review (`ai.getSuggestions` / `acceptSuggestion` / `dismissSuggestion`); nothing auto-applies, per the AI Philosophy above.
+
+**Frontend:** `client/src/App.tsx` holds the entire wouter route table (~116 pages under `client/src/pages`). Public/marketing routes render bare; every authenticated `/app/*` route is wrapped with `withAppShell(Component)`, which adds the `AppShell` sidebar and a per-route `ErrorBoundary` — new authenticated pages must use this wrapper, not a bare `<Route>`. `client/src/components` (~61 files) holds feature widgets; `client/src/components/ui` holds shadcn/ui primitives. `client/src/lib/trpc.ts` wires the tRPC client into TanStack Query; `client/src/contexts` holds `ThemeContext`/`KeyboardShortcutContext`; `client/src/_core/hooks/useAuth.ts` is the auth hook.
+
+**Path aliases:** `@` → `client/src`, `@shared` → `shared/`, `@assets` → `attached_assets/`. Defined in three places that must stay in sync if changed: `vite.config.ts`, `vitest.config.ts`, and `tsconfig.json`.
+
+**`shared/`:** code imported by both client and server — `shared/types.ts`, `shared/const.ts` (cookie name, shared error messages), `shared/govContracting.ts` (FAR/DFARS/NAICS/PSC reference data), `shared/_core/errors.ts`.
+
+**Environment/config:** `server/_core/env.ts` centralizes every `process.env` read behind an `ENV` object; `validateProductionCoreEnv()` runs at server startup and hard-fails production boot if a required var is missing, `OWNER_EMAIL` doesn't match the canonical platform owner, or `JWT_SECRET` is too short. New environment variables should be added to `ENV` here rather than read inline — this is the pattern the hardcoded-Resend-key incident (see Known Technical Debt) violated.
+
+### Testing Conventions
+
+Tests run under Vitest in a Node environment (`vitest.config.ts`), colocated as `server/*.test.ts` (no client-side test suite currently exists). The prevailing pattern mocks `server/db.ts` with `vi.mock("./db", ...)` and a hand-rolled chainable query-builder mock (`select().from().where().orderBy().limit()` etc. each returning the next mock) rather than hitting a real database inside the test itself — follow this pattern for new router-level tests. Several existing test files are named after the build phase that introduced their coverage (`phase2RouterCorrectness.test.ts`, `phase4SamFoundation.test.ts`, `phase7ContractOperations.test.ts`, …); that's historical, not a required convention — name new test files after the module under test.
+
 ## Quality Standards
 
 Every change must:
@@ -427,4 +471,4 @@ Before implementing significant architectural changes, explain your reasoning. A
 
 ## Planned Expansion
 
-Still to be written with real project specifics (do not invent content — pull from source material as it's provided): Project Vision, System Architecture (deeper than §2/§5 of the Master Specification), Customer Workspace Architecture, Platform Admin Architecture, Coding Standards, Testing Standards, Migration Register Rules (detailed schema beyond § of Step 12 above), Current Priorities.
+"Codebase Structure & Development Workflow" above now covers System Architecture, Coding Standards, and Testing Standards at the code-verified level (commands, router/RBAC/data-access patterns, frontend structure, env handling). Still to be written with real project specifics (do not invent content — pull from source material as it's provided): Project Vision, deeper Customer Workspace Architecture and Platform Admin Architecture (beyond the file-level pointers above), Migration Register Rules (a detailed schema for the Step 12 fields beyond "record these fields"), Current Priorities.
