@@ -256,7 +256,7 @@ export default function SamRegistrationWorkspace({
     }).length;
 
   const markReviewed = () => {
-    setReviewedSections((current) => new Set([...current, active.key]));
+    setReviewedSections((current) =>\n      new Set(Array.from(current).concat(active.key))\n    );
   };
 
   return (
