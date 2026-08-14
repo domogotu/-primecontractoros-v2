@@ -286,8 +286,7 @@ function AIGuidanceButton({
                   className="h-7 px-2 text-[10px] bg-white border-blue-200 text-blue-700 hover:bg-blue-100"
                   onClick={() => {
                     // Try to extract a suggestion from the text if it looks like one, or just provide a starting point
-                    const lines = guidance.split('
-');
+                    const lines = guidance.split('\n');
                     const suggestionLine = lines.find(l => l.toLowerCase().includes('suggestion:') || l.toLowerCase().includes('example:'));
                     const cleanSuggestion = suggestionLine ? suggestionLine.split(':')[1]?.trim() : guidance.substring(0, 100) + "...";
                     onUseSuggestion(cleanSuggestion);
