@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import SamRenewalReadinessCard from "./SamRenewalReadinessCard";
+import SamRenewalToolsPanel from "./SamRenewalToolsPanel";
 import type {
   SamRegistrationSnapshot,
   SamSectionKey,
@@ -266,6 +267,18 @@ export default function SamRegistrationWorkspace({
       <SamRenewalReadinessCard
         snapshot={snapshot}
         onReview={() => setActiveIndex(0)}
+      />
+
+      <SamRenewalToolsPanel
+        expirationDate={
+          typeof values.samExpirationDate === "string"
+            ? values.samExpirationDate
+            : expirationDate
+        }
+        values={values}
+        reviewedSectionTitles={SECTIONS.filter((section) =>
+          reviewedSections.has(section.key)
+        ).map((section) => section.title)}
       />
 
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
