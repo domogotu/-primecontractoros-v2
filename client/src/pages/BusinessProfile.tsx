@@ -45,7 +45,8 @@ import TrainingWalkthrough from "@/components/TrainingWalkthrough";
 import AutosaveIndicator from "@/components/AutosaveIndicator";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent } from "@/components/ui/card";\nimport SamRegistrationWorkspace from "@/components/SamRegistrationWorkspace";
+import { Card, CardContent } from "@/components/ui/card";
+import SamRegistrationWorkspace from "@/components/SamRegistrationWorkspace";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type SamStatus = 'active' | 'expired' | 'pending' | 'not_registered';
@@ -285,7 +286,8 @@ function AIGuidanceButton({
                   className="h-7 px-2 text-[10px] bg-white border-blue-200 text-blue-700 hover:bg-blue-100"
                   onClick={() => {
                     // Try to extract a suggestion from the text if it looks like one, or just provide a starting point
-                    const lines = guidance.split('\n');
+                    const lines = guidance.split('
+');
                     const suggestionLine = lines.find(l => l.toLowerCase().includes('suggestion:') || l.toLowerCase().includes('example:'));
                     const cleanSuggestion = suggestionLine ? suggestionLine.split(':')[1]?.trim() : guidance.substring(0, 100) + "...";
                     onUseSuggestion(cleanSuggestion);
