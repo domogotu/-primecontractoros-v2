@@ -45,7 +45,7 @@ import TrainingWalkthrough from "@/components/TrainingWalkthrough";
 import AutosaveIndicator from "@/components/AutosaveIndicator";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";\nimport SamRegistrationWorkspace from "@/components/SamRegistrationWorkspace";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type SamStatus = 'active' | 'expired' | 'pending' | 'not_registered';
@@ -1076,6 +1076,41 @@ export default function BusinessProfile() {
 
       <GuidanceQuestionPanel pageContext="business-profile" />
       <TrainingWalkthrough pageContext="business-profile" />
+
+      <SamRegistrationWorkspace
+        initialStatus={
+          formData.samStatus === "active"
+            ? "active"
+            : formData.samStatus === "expired"
+              ? "expired"
+              : formData.samStatus === "pending"
+                ? "processing"
+                : "draft"
+        }
+        expirationDate={formData.samExpirationDate || null}
+        initialValues={{
+          legalName: formData.legalName,
+          dba: formData.dba,
+          website: formData.website,
+          physicalAddress: [formData.address, formData.city, formData.state, formData.zip]
+            .filter(Boolean)
+            .join(", "),
+          formationDate: formData.yearFounded
+            ? `${formData.yearFounded}-01-01`
+            : "",
+          primaryNaics: formData.naicsPrimary,
+          additionalNaics: formData.naicsSecondary,
+          uei: formData.uei,
+          cageCode: formData.cage,
+          samStatus: formData.samStatus,
+          samExpirationDate: formData.samExpirationDate,
+          employeesWorldwide: formData.numberOfEmployees,
+          annualReceiptsWorldwide: formData.annualRevenue,
+          governmentBusinessPoc: formData.defaultContactName,
+          electronicBusinessPoc: formData.defaultContactName,
+          accountsReceivablePoc: formData.defaultContactName,
+        }}
+      />
 
       {/* ── PROFILE COMPLETENESS PANEL ─────────────────────────────────────── */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-2">
