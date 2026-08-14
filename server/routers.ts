@@ -1268,9 +1268,7 @@ export const appRouter = router({
               },
               {
                 role: "user",
-                content: `${input.recordType} context: ${input.context}
-
-Provide suggestions in JSON format with title, text, priority, and action.`,
+                content: `${input.recordType} context: ${input.context}\n\nProvide suggestions in JSON format with title, text, priority, and action.`,
               },
             ],
           });
