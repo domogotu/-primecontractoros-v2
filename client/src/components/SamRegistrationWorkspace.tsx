@@ -440,7 +440,7 @@ export default function SamRegistrationWorkspace({
         )
       );
     }
-  }, [initialValues, profileQuery.data?.profile]);
+  }, [profileQuery.data?.profile]);
 
   const snapshot = useMemo<SamRegistrationSnapshot>(
     () => ({
