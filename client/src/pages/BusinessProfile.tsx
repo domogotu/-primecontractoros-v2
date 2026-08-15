@@ -80,8 +80,8 @@ interface PastPerf {
 
 interface BankingInfo {
   bankName: string;
-  routingNumber: string;
-  accountNumber: string;
+  routingLastFour: string;
+  accountLastFour: string;
   accountType: 'Checking' | 'Savings' | '';
 }
 
@@ -200,6 +200,27 @@ function isFilled(value: any): boolean {
     return true;
   }
   return false;
+}
+
+function sanitizeLegacyBankingInfo(value: string): string {
+  try {
+    const parsed = value ? JSON.parse(value) : {};
+    const digits = (input: unknown) =>
+      typeof input === "string" ? input.replace(/\D/g, "") : "";
+    const routingDigits = digits(parsed.routingLastFour || parsed.routingNumber);
+    const accountDigits = digits(parsed.accountLastFour || parsed.accountNumber);
+    return JSON.stringify({
+      bankName: typeof parsed.bankName === "string" ? parsed.bankName : "",
+      routingLastFour: routingDigits.slice(-4),
+      accountLastFour: accountDigits.slice(-4),
+      accountType:
+        parsed.accountType === "Checking" || parsed.accountType === "Savings"
+          ? parsed.accountType
+          : "",
+    });
+  } catch {
+    return "{}";
+  }
 }
 
 function calcSectionScore(fields: FieldDef[], formData: FormData): number {
@@ -550,7 +571,7 @@ function ProfileViewMode({ formData, onEdit }: { formData: FormData; onEdit: () 
                   <div className="text-sm">
                     <p className="font-medium text-slate-900">{bankingInfo.bankName}</p>
                     <p className="text-slate-500 font-mono text-xs">
-                      Acct: ****{bankingInfo.accountNumber?.slice(-4) || '****'}
+                      Acct: ****{bankingInfo.accountLastFour || '****'}
                     </p>
                   </div>
                 ) : <p className="text-xs text-slate-400 italic">No banking info</p>}
@@ -601,7 +622,12 @@ export default function BusinessProfile() {
 
   useEffect(() => {
     if (profileQuery.data) {
-      setFormData(profileQuery.data as any);
+      setFormData({
+        ...(profileQuery.data as any),
+        bankingInfo: sanitizeLegacyBankingInfo(
+          String((profileQuery.data as any).bankingInfo ?? "{}")
+        ),
+      });
       setIsLoading(false);
     } else if (profileQuery.isSuccess && !(profileQuery as any).data) {
       setFormData({
@@ -638,7 +664,12 @@ export default function BusinessProfile() {
     setIsSaving(true);
     setHasUnsavedChanges(false);
     try {
-      await upsertMutation.mutateAsync(formData as any);
+      const safeFormData = {
+        ...formData,
+        bankingInfo: sanitizeLegacyBankingInfo(formData.bankingInfo),
+      };
+      await upsertMutation.mutateAsync(safeFormData as any);
+      setFormData(safeFormData);
       await utils.businessProfile.get.invalidate();
       setLastSaved(new Date());
       toast.success('Business profile saved successfully');
@@ -912,6 +943,11 @@ export default function BusinessProfile() {
           <label htmlFor="skip-banking" className="text-[10px] text-gray-500 cursor-pointer">I'll add this later</label>
         </div>
         
+        <p className="text-xs text-amber-700">
+          Full routing and account numbers are intentionally not stored here. Use the
+          protected SAM registration profile for verified last-four references.
+        </p>
+
         {skippedSections['bankingInfo'] ? (
           <div className="p-4 bg-gray-50 border border-dashed border-gray-200 rounded-lg text-center">
             <p className="text-xs text-gray-500">Section skipped. You can come back and fill this in anytime.</p>
@@ -923,12 +959,24 @@ export default function BusinessProfile() {
               <Input value={info.bankName || ''} onChange={e => update('bankName', e.target.value)} className="text-xs h-8" />
             </div>
             <div className="space-y-1">
-              <Label className="text-[10px]">Routing Number (9 digits)</Label>
-              <Input value={info.routingNumber || ''} onChange={e => update('routingNumber', e.target.value)} maxLength={9} className="text-xs h-8" />
+              <Label className="text-[10px]">Routing number — last four only</Label>
+              <Input
+                value={info.routingLastFour || ''}
+                onChange={e => update('routingLastFour', e.target.value.replace(/\D/g, '').slice(0, 4))}
+                inputMode="numeric"
+                maxLength={4}
+                className="text-xs h-8"
+              />
             </div>
             <div className="space-y-1">
-              <Label className="text-[10px]">Account Number</Label>
-              <Input value={info.accountNumber || ''} onChange={e => update('accountNumber', e.target.value)} className="text-xs h-8" />
+              <Label className="text-[10px]">Account number — last four only</Label>
+              <Input
+                value={info.accountLastFour || ''}
+                onChange={e => update('accountLastFour', e.target.value.replace(/\D/g, '').slice(0, 4))}
+                inputMode="numeric"
+                maxLength={4}
+                className="text-xs h-8"
+              />
             </div>
             <div className="space-y-1">
               <Label className="text-[10px]">Account Type</Label>
