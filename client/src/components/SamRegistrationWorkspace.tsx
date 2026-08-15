@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 import {
   Building2,
   CheckCircle2,
@@ -213,6 +215,201 @@ const SECTIONS: Section[] = [
   },
 ];
 
+function textValue(values: DraftValues, key: string): string | undefined {
+  const value = values[key];
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function numberValue(values: DraftValues, key: string): number | undefined {
+  const raw = textValue(values, key);
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function compactRecord(input: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined && value !== "")
+  );
+}
+
+function normalizeChoice(value?: string) {
+  return value?.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function profileToDraftValues(profile: any): DraftValues {
+  if (!profile) return {};
+  const values: DraftValues = {};
+  const merge = (record: unknown) => {
+    if (record && typeof record === "object") {
+      Object.assign(values, record as Record<string, string | boolean>);
+    }
+  };
+
+  merge(profile.entityIdentity);
+  merge(profile.businessTypes);
+  merge(profile.entityRelationships);
+  merge(profile.legalRepresentations);
+  merge(profile.goodsServicesSize);
+  merge(profile.businessOperations);
+  merge(profile.federalAssistance);
+
+  const taxpayer = profile.taxpayerRestricted ?? {};
+  merge(taxpayer);
+  if (taxpayer.mostRecentTaxReturnYear != null) {
+    values.taxReturnYear = String(taxpayer.mostRecentTaxReturnYear);
+  }
+  if (taxpayer.consentSignerName) values.consentSigner = taxpayer.consentSignerName;
+
+  const payment = profile.paymentRestricted ?? {};
+  merge(payment);
+  if (payment.verifiedAt) {
+    values.bankVerifiedAt = new Date(payment.verifiedAt).toISOString().slice(0, 10);
+  }
+
+  const contacts = Array.isArray(profile.pointsOfContact)
+    ? profile.pointsOfContact
+    : [];
+  for (const contact of contacts) {
+    if (contact?.role && contact?.name) values[contact.role] = contact.name;
+  }
+
+  if (profile.uei) values.uei = profile.uei;
+  if (profile.cageCode) values.cageCode = profile.cageCode;
+  if (profile.status) {
+    values.samStatus = String(profile.status)
+      .split("_")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+  if (profile.submittedAt) {
+    values.samSubmittedAt = new Date(profile.submittedAt).toISOString().slice(0, 10);
+  }
+  if (profile.activatedAt) {
+    values.samActivatedAt = new Date(profile.activatedAt).toISOString().slice(0, 10);
+  }
+  if (profile.expirationDate) {
+    values.samExpirationDate = new Date(profile.expirationDate)
+      .toISOString()
+      .slice(0, 10);
+  }
+  return values;
+}
+
+function buildUpdatePayload(values: DraftValues) {
+  const status = normalizeChoice(textValue(values, "samStatus"));
+  const pointsOfContact = [
+    "governmentBusinessPoc",
+    "electronicBusinessPoc",
+    "accountsReceivablePoc",
+    "pastPerformancePoc",
+    "governmentBusinessAlternate",
+    "electronicBusinessAlternate",
+    "pastPerformanceAlternate",
+  ]
+    .map((role) => ({ role, name: textValue(values, role) }))
+    .filter((contact) => contact.name);
+
+  return {
+    status,
+    uei: textValue(values, "uei"),
+    cageCode: textValue(values, "cageCode"),
+    entityIdentity: compactRecord({
+      legalName: textValue(values, "legalName"),
+      dba: textValue(values, "dba"),
+      website: textValue(values, "website"),
+      divisionName: textValue(values, "divisionName"),
+      divisionNumber: textValue(values, "divisionNumber"),
+      physicalAddress: textValue(values, "physicalAddress"),
+      mailingAddress: textValue(values, "mailingAddress"),
+      mailingSameAsPhysical: Boolean(values.mailingSameAsPhysical),
+      formationDate: textValue(values, "formationDate"),
+      entityStructure: textValue(values, "entityStructure"),
+      profitStructure: textValue(values, "profitStructure"),
+      organizationFactor: textValue(values, "organizationFactor"),
+      manufacturerOfGoods: Boolean(values.manufacturer),
+    }),
+    taxpayerRestricted: compactRecord({
+      tinType: normalizeChoice(textValue(values, "tinType")),
+      tinLastFour: textValue(values, "tinLastFour"),
+      taxpayerName: textValue(values, "taxpayerName"),
+      taxpayerAddress: textValue(values, "taxpayerAddress"),
+      mostRecentTaxReturnYear: numberValue(values, "taxReturnYear"),
+      hasCommonParent: Boolean(values.hasCommonParent),
+      consentSignerName: textValue(values, "consentSigner"),
+      consentSignerTitle: textValue(values, "consentSignerTitle"),
+      consentDate: textValue(values, "consentDate"),
+    }),
+    businessTypes: compactRecord({
+      minorityOwned: values.minorityOwned,
+      blackAmericanOwned: values.blackAmericanOwned,
+      womanOwned: values.womanOwned,
+      veteranOwned: values.veteranOwned,
+      hubZone: values.hubZone,
+      smallBusinessJointVenture: values.smallBusinessJointVenture,
+      disadvantagedBusinessEnterprise: values.disadvantagedBusinessEnterprise,
+      smallDisadvantagedBusiness: values.smallDisadvantagedBusiness,
+      sdbAttestationDate: textValue(values, "sdbAttestationDate"),
+    }),
+    entityRelationships: compactRecord({
+      ownedByAnotherEntity: values.ownedByAnotherEntity,
+      immediateOwner: textValue(values, "immediateOwner"),
+      highestLevelOwner: textValue(values, "highestLevelOwner"),
+      hasPredecessor: values.hasPredecessor,
+      predecessorDetails: textValue(values, "predecessorDetails"),
+      invertedDomesticCorporation: values.invertedDomesticCorporation,
+    }),
+    paymentRestricted: compactRecord({
+      bankName: textValue(values, "bankName"),
+      accountType: normalizeChoice(textValue(values, "accountType")),
+      routingLastFour: textValue(values, "routingLastFour"),
+      accountLastFour: textValue(values, "accountLastFour"),
+      paymentAddress: textValue(values, "paymentAddress"),
+      verifiedAt: textValue(values, "bankVerifiedAt"),
+    }),
+    legalRepresentations: compactRecord({
+      awardProceedings: values.awardProceedings,
+      otherProceedings: values.otherProceedings,
+      taxLiability: values.taxLiability,
+      exclusions: values.exclusions,
+      terminations: values.terminations,
+      legalExplanation: textValue(values, "legalExplanation"),
+    }),
+    goodsServicesSize: compactRecord({
+      primaryNaics: textValue(values, "primaryNaics"),
+      additionalNaics: textValue(values, "additionalNaics"),
+      naicsExceptions: textValue(values, "naicsExceptions"),
+      pscCodes: textValue(values, "pscCodes"),
+      employeesWorldwide: numberValue(values, "employeesWorldwide"),
+      employeesLocation: numberValue(values, "employeesLocation"),
+      annualReceiptsWorldwide: numberValue(values, "annualReceiptsWorldwide"),
+      annualReceiptsLocation: numberValue(values, "annualReceiptsLocation"),
+      sizeCalculationPeriod: textValue(values, "sizeCalculationPeriod"),
+    }),
+    businessOperations: compactRecord({
+      facilityClearance: textValue(values, "facilityClearance"),
+      employeeClearance: textValue(values, "employeeClearance"),
+      usesEdi: values.usesEdi,
+      disasterRegistry: values.disasterRegistry,
+      requiresBonding: values.requiresBonding,
+      bondingCapacity: textValue(values, "bondingCapacity"),
+      geographicScope: textValue(values, "geographicScope"),
+      statesServed: textValue(values, "statesServed"),
+      countiesMsas: textValue(values, "countiesMsas"),
+    }),
+    pointsOfContact,
+    federalAssistance: compactRecord({
+      federalAssistance: values.federalAssistance,
+      confirmationReference: textValue(values, "confirmationReference"),
+    }),
+    submittedAt: textValue(values, "samSubmittedAt"),
+    activatedAt: textValue(values, "samActivatedAt"),
+    expirationDate: textValue(values, "samExpirationDate"),
+  };
+}
+
 export default function SamRegistrationWorkspace({
   initialStatus = "draft",
   expirationDate,
@@ -223,12 +420,35 @@ export default function SamRegistrationWorkspace({
   const [reviewedSections, setReviewedSections] = useState<Set<SamSectionKey>>(
     new Set()
   );
+  const utils = trpc.useContext();
+  const profileQuery = trpc.samRegistration.get.useQuery();
+  const upsertMutation = trpc.samRegistration.upsert.useMutation();
+  const verifyMutation = trpc.samRegistration.verifyField.useMutation();
   const active = SECTIONS[activeIndex];
+
+  useEffect(() => {
+    if (profileQuery.data?.profile) {
+      setValues({
+        ...initialValues,
+        ...profileToDraftValues(profileQuery.data.profile),
+      });
+      setReviewedSections(
+        new Set(
+          profileQuery.data.profile.verifications
+            .filter((item: any) => item.verifiedAt)
+            .map((item: any) => item.sectionKey as SamSectionKey)
+        )
+      );
+    }
+  }, [initialValues, profileQuery.data?.profile]);
 
   const snapshot = useMemo<SamRegistrationSnapshot>(
     () => ({
-      status: initialStatus,
-      expirationDate,
+      status:
+        (profileQuery.data?.profile?.status as SamRegistrationSnapshot["status"]) ??
+        initialStatus,
+      expirationDate:
+        profileQuery.data?.profile?.expirationDate ?? expirationDate,
       fields: SECTIONS.flatMap((section) =>
         section.fields.map((field) => ({
           fieldKey: field.key,
@@ -247,7 +467,14 @@ export default function SamRegistrationWorkspace({
         }))
       ),
     }),
-    [expirationDate, initialStatus, reviewedSections, values]
+    [
+      expirationDate,
+      initialStatus,
+      profileQuery.data?.profile?.expirationDate,
+      profileQuery.data?.profile?.status,
+      reviewedSections,
+      values,
+    ]
   );
 
   const completedFor = (section: Section) =>
@@ -256,10 +483,43 @@ export default function SamRegistrationWorkspace({
       return typeof value === "boolean" || String(value ?? "").trim().length > 0;
     }).length;
 
-  const markReviewed = () => {
-    setReviewedSections(
-      (current) => new Set(Array.from(current).concat(active.key))
-    );
+  const saveAndReviewSection = async () => {
+    try {
+      const saved = await upsertMutation.mutateAsync(
+        buildUpdatePayload(values) as any
+      );
+      await Promise.all(
+        active.fields.map((field) => {
+          const value = values[field.key];
+          const isComplete =
+            typeof value === "boolean" ||
+            String(value ?? "").trim().length > 0;
+          return verifyMutation.mutateAsync({
+            profileId: saved.profileId,
+            verification: {
+              sectionKey: active.key,
+              fieldKey: field.key,
+              sensitivity: field.restricted
+                ? active.key === "payment"
+                  ? "highly_restricted"
+                  : "restricted"
+                : "standard",
+              isComplete,
+              source: "workspace_user",
+              verifiedAt: new Date(),
+            },
+          });
+        })
+      );
+      setReviewedSections(
+        (current) => new Set(Array.from(current).concat(active.key))
+      );
+      await utils.samRegistration.get.invalidate();
+      toast.success(`${active.title} saved and verified`);
+    } catch (error) {
+      console.error("Failed to save SAM registration section", error);
+      toast.error("This SAM section could not be saved. Review the fields and try again.");
+    }
   };
 
   return (
@@ -285,8 +545,8 @@ export default function SamRegistrationWorkspace({
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="font-semibold text-slate-900">SAM Registration Profile</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Interface preview. Entries remain in this page until the protected
-            data connection is completed in the final integration step.
+            Entries are stored in your workspace-scoped registration profile.
+            Restricted identifiers are limited to their last four digits.
           </p>
         </div>
 
@@ -372,11 +632,14 @@ export default function SamRegistrationWorkspace({
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   type="button"
-                  onClick={markReviewed}
-                  className="inline-flex min-h-10 items-center justify-center rounded-md border border-green-300 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-50"
+                  onClick={saveAndReviewSection}
+                  disabled={upsertMutation.isPending || verifyMutation.isPending}
+                  className="inline-flex min-h-10 items-center justify-center rounded-md border border-green-300 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <CheckCircle2 className="mr-2 h-4 w-4" />
-                  Mark section reviewed
+                  {upsertMutation.isPending || verifyMutation.isPending
+                    ? "Saving..."
+                    : "Save and verify section"}
                 </button>
                 <button
                   type="button"
