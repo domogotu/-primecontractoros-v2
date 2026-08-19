@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD COLUMN `passwordHash` varchar(255);\nALTER TABLE `users` ADD COLUMN `passwordChangedAt` timestamp NULL;\nALTER TABLE `users` ADD COLUMN `failedLoginAttempts` int NOT NULL DEFAULT 0;\nALTER TABLE `users` ADD COLUMN `lockedUntil` timestamp NULL;\n
