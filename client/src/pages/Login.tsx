@@ -1,118 +1,81 @@
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useLocation } from "wouter";
-import { useEffect } from "react";
-import { ArrowRight, LogIn } from "lucide-react";
-import { getLoginUrl, navigateToLogin } from "@/const";
+import { FormEvent, useEffect, useState } from "react";
+import { ArrowRight, Loader2, LockKeyhole } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 
-/**
- * Login Page
- * 
- * Redirects to Manus OAuth for authentication.
- * If already authenticated, redirects to dashboard.
- */
 export default function Login() {
   const [, navigate] = useLocation();
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, refresh } = useAuth();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!loading && isAuthenticated) {
-      navigate("/app/dashboard", { replace: true });
-    }
+    if (!loading && isAuthenticated) navigate("/app/dashboard", { replace: true });
   }, [isAuthenticated, loading, navigate]);
 
-  const handleLogin = () => {
-    navigateToLogin();
-  };
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email, password }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Unable to sign in.");
+      await refresh();
+      const returnPath = new URLSearchParams(window.location.search).get("returnPath");
+      window.location.href = returnPath?.startsWith("/") ? returnPath : "/app/dashboard";
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to sign in.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Navigation */}
-      <nav className="border-b border-gray-200 sticky top-0 bg-white/95 backdrop-blur z-50">
+      <nav className="border-b border-gray-200 bg-white/95">
         <div className="container flex items-center justify-between py-4">
-          <button onClick={() => navigate("/")} className="text-2xl font-bold text-primary">
-            PrimeContractorOS
-          </button>
-          <div className="flex gap-4">
-            <Button variant="ghost" onClick={() => navigate("/")}>
-              Home
-            </Button>
-            <Button variant="ghost" onClick={() => navigate("/features")}>
-              Features
-            </Button>
-            <Button variant="outline" onClick={() => navigate("/get-started")}>
-              Get Started
-            </Button>
-          </div>
+          <button onClick={() => navigate("/")} className="text-2xl font-bold text-primary">PrimeContractorOS</button>
+          <Button variant="ghost" onClick={() => navigate("/")}>Home</Button>
         </div>
       </nav>
-
-      {/* Main Content */}
-      <div className="min-h-[calc(100vh-80px)] flex items-center justify-center py-12">
-        <div className="w-full max-w-md px-4">
-          <div className="space-y-8">
-            {/* Header */}
-            <div className="text-center space-y-2">
-              <h1 className="text-3xl font-bold">Welcome Back</h1>
-              <p className="text-gray-500">
-                Sign in to your PrimeContractorOS workspace
-              </p>
-            </div>
-
-            {/* OAuth Login Button */}
-            <div className="space-y-6">
-              <Button
-                onClick={handleLogin}
-                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-6 text-lg"
-              >
-                <LogIn className="mr-2 h-5 w-5" />
-                Sign In with Manus Account
-              </Button>
-
-              <p className="text-center text-sm text-gray-500">
-                Secure authentication powered by Manus OAuth. Your credentials are never stored on our servers.
-              </p>
-              <p className="text-center text-xs text-gray-400">
-                By signing in, you agree to our{" "}
-                <a href="/terms" target="_blank" className="text-blue-600 hover:underline">Terms of Service</a>
-                {" "}and{" "}
-                <a href="/privacy" target="_blank" className="text-blue-600 hover:underline">Privacy Policy</a>.
-              </p>
-            </div>
-
-            {/* Divider */}
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200" />
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white text-gray-500">
-                  New to PrimeContractorOS?
-                </span>
-              </div>
-            </div>
-
-            {/* Sign Up Link */}
-            <Button
-              variant="outline"
-              onClick={() => navigate("/get-started")}
-              className="w-full"
-            >
-              Create Account <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-
-            {/* Help Links */}
-            <div className="text-center space-y-2 text-sm">
-              <p className="text-gray-500">
-                Need help signing in?{" "}
-                <button onClick={() => navigate("/support")} className="text-primary hover:underline">
-                  Contact support
-                </button>
-              </p>
-            </div>
+      <main className="min-h-[calc(100vh-80px)] flex items-center justify-center py-12">
+        <div className="w-full max-w-md px-4 space-y-8">
+          <div className="text-center space-y-2">
+            <LockKeyhole className="mx-auto h-10 w-10 text-primary" />
+            <h1 className="text-3xl font-bold">Welcome Back</h1>
+            <p className="text-gray-500">Sign in securely to your PrimeContractorOS workspace</p>
           </div>
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email address</Label>
+              <Input id="email" type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input id="password" type="password" autoComplete="current-password" required minLength={12} value={password} onChange={e => setPassword(e.target.value)} />
+            </div>
+            {error && <div role="alert" className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+            <Button type="submit" disabled={submitting} className="w-full py-6 text-lg">
+              {submitting ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <LockKeyhole className="mr-2 h-5 w-5" />}
+              Sign In
+            </Button>
+          </form>
+          <button type="button" onClick={() => navigate(`/forgot-password${email ? `?email=${encodeURIComponent(email)}` : ""}`)} className="block w-full text-center text-sm text-primary hover:underline">Forgot or replace your password?</button>\n          <p className="text-center text-xs text-gray-500">Credentials are protected by salted password hashing and secure session cookies.</p>
+          <Button variant="outline" onClick={() => navigate("/get-started")} className="w-full">Create Account <ArrowRight className="ml-2 h-4 w-4" /></Button>
+          <p className="text-center text-sm text-gray-500">Need access help? <button onClick={() => navigate("/support")} className="text-primary hover:underline">Contact support</button></p>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

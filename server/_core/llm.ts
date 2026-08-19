@@ -209,34 +209,18 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-// Use OpenAI directly when OPENAI_API_KEY is set, otherwise fall back to Manus Forge API
-const resolveApiUrl = () => {
-  if (!!(process.env.OPENAI_API_KEY) && (process.env.OPENAI_API_KEY.trim().length > 0)) {
-    return "https://api.openai.com/v1/chat/completions";
-  }
-  return ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://forge.manus.im/v1/chat/completions";
-};
+// PrimeContractorOS uses its own OpenAI account. There is deliberately no Manus
+// fallback: if the key is missing, AI features fail closed without sending data
+// to an unapproved third-party service.
+const resolveApiUrl = () => "https://api.openai.com/v1/chat/completions";
 
-const resolveApiKey = () => {
-  if (!!(process.env.OPENAI_API_KEY) && (process.env.OPENAI_API_KEY.trim().length > 0)) {
-    return process.env.OPENAI_API_KEY || "";
-  }
-  return ENV.forgeApiKey;
-};
+const resolveApiKey = () => (process.env.OPENAI_API_KEY ?? "").trim();
 
-const resolveModel = () => {
-  // Use GPT-4.1-mini when OpenAI key is configured (fast, cost-effective, capable)
-  if (!!(process.env.OPENAI_API_KEY) && (process.env.OPENAI_API_KEY.trim().length > 0)) {
-    return "gpt-4.1-mini";
-  }
-  return "gemini-2.5-flash";
-};
+const resolveModel = () => process.env.OPENAI_MODEL?.trim() || "gpt-4.1-mini";
 
 const assertApiKey = () => {
-  if (!(process.env.OPENAI_API_KEY || "") && !ENV.forgeApiKey) {
-    throw new Error("No API key configured. Set OPENAI_API_KEY or BUILT_IN_FORGE_API_KEY.");
+  if (!resolveApiKey()) {
+    throw new Error("AI is not configured. Set OPENAI_API_KEY.");
   }
 };
 
@@ -299,8 +283,6 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     response_format,
   } = params;
 
-  const useOpenAI = !!(process.env.OPENAI_API_KEY) && (process.env.OPENAI_API_KEY.trim().length > 0);
-
   const payload: Record<string, unknown> = {
     model: resolveModel(),
     messages: messages.map(normalizeMessage),
@@ -318,14 +300,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  if (useOpenAI) {
-    // OpenAI: use standard max_tokens
-    payload.max_tokens = 4096;
-  } else {
-    // Forge/Gemini: extended tokens with thinking budget
-    payload.max_tokens = 32768;
-    payload.thinking = { budget_tokens: 128 };
-  }
+  payload.max_tokens = params.maxTokens ?? params.max_tokens ?? 4096;
 
   const normalizedResponseFormat = normalizeResponseFormat({
     responseFormat,
