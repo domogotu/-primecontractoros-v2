@@ -18,6 +18,7 @@ export const users = mysqlTable("users", {
   loginMethod: varchar("loginMethod", { length: 64 }),
   passwordHash: varchar("passwordHash", { length: 255 }),
   passwordChangedAt: timestamp("passwordChangedAt"),
+  sessionVersion: int("sessionVersion").default(0).notNull(),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   accountStatus: mysqlEnum("accountStatus", ["active", "disabled", "suspended"]).default("active").notNull(),
   lastActivityAt: timestamp("lastActivityAt"),
