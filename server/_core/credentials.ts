@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { compare, hash } from "bcryptjs";
 import { createHash, randomBytes } from "crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { Resend } from "resend";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { passwordResetTokens, users } from "../../drizzle/schema";
@@ -44,7 +44,7 @@ export function registerCredentialRoutes(app: Express) {
     const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
     const genericError = { error: "Email or password is incorrect. You can reset your password if needed." };
     if (!user?.passwordHash || user.accountStatus !== "active" || !(await compare(password, user.passwordHash))) return res.status(401).json(genericError);
-    const token = await sdk.createSessionToken(user.openId, { name: user.name || "PrimeContractorOS User", expiresInMs: ONE_YEAR_MS });
+    const token = await sdk.createSessionToken(user.openId, { name: user.name || "PrimeContractorOS User", expiresInMs: ONE_YEAR_MS, sessionVersion: user.sessionVersion ?? 0 });
     await db.update(users).set({ lastSignedIn: new Date(), lastActivityAt: new Date(), loginMethod: "credentials" }).where(eq(users.id, user.id));
     res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(req), maxAge: ONE_YEAR_MS });
     return res.status(200).json({ success: true });
@@ -84,7 +84,7 @@ export function registerCredentialRoutes(app: Express) {
     const [record] = await db.select().from(passwordResetTokens).where(and(eq(passwordResetTokens.tokenHash, tokenHash(rawToken)), isNull(passwordResetTokens.usedAt), gt(passwordResetTokens.expiresAt, new Date()))).limit(1);
     if (!record) return res.status(400).json({ error: "This reset link is invalid or expired." });
     await db.transaction(async tx => {
-      await tx.update(users).set({ passwordHash: await hash(newPassword, BCRYPT_COST), passwordChangedAt: new Date(), loginMethod: "credentials" }).where(eq(users.id, record.userId));
+      await tx.update(users).set({ passwordHash: await hash(newPassword, BCRYPT_COST), passwordChangedAt: new Date(), sessionVersion: sql`${users.sessionVersion} + 1`, loginMethod: "credentials" }).where(eq(users.id, record.userId));
       await tx.update(passwordResetTokens).set({ usedAt: new Date() }).where(eq(passwordResetTokens.id, record.id));
     });
     res.clearCookie(COOKIE_NAME, getSessionCookieOptions(req));
