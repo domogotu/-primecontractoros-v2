@@ -71,7 +71,7 @@ export default function Login() {
               Sign In
             </Button>
           </form>
-          <p className="text-center text-xs text-gray-500">Credentials are protected by salted password hashing and secure session cookies.</p>
+          <button type="button" onClick={() => navigate(`/forgot-password${email ? `?email=${encodeURIComponent(email)}` : ""}`)} className="block w-full text-center text-sm text-primary hover:underline">Forgot or replace your password?</button>\n          <p className="text-center text-xs text-gray-500">Credentials are protected by salted password hashing and secure session cookies.</p>
           <Button variant="outline" onClick={() => navigate("/get-started")} className="w-full">Create Account <ArrowRight className="ml-2 h-4 w-4" /></Button>
           <p className="text-center text-sm text-gray-500">Need access help? <button onClick={() => navigate("/support")} className="text-primary hover:underline">Contact support</button></p>
         </div>
