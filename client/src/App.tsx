@@ -10,7 +10,7 @@ import Features from "./pages/Features";
 import Pricing from "./pages/Pricing";
 import Help from "./pages/Help";
 import GetStarted from "./pages/GetStarted";
-import Login from "./pages/Login";
+import Login from "./pages/Login";\nimport ForgotPassword from "./pages/ForgotPassword";\nimport ResetPassword from "./pages/ResetPassword";
 import AppRouter from "./pages/AppRouter";
 import Dashboard from "./pages/Dashboard";
 import Opportunities from "./pages/Opportunities";
@@ -136,7 +136,7 @@ function Router() {
       <Route path={"/support"} component={Support} />
       <Route path={"/get-started"} component={GetStarted} />
       <Route path={"/checkout/success"} component={CheckoutSuccess} />
-      <Route path={"/login"} component={Login} />
+      <Route path={"/login"} component={Login} />\n      <Route path={"/forgot-password"} component={ForgotPassword} />\n      <Route path={"/reset-password"} component={ResetPassword} />
       <Route path={"/about"} component={About} />
       <Route path={"/contact"} component={ContactPage} />
       <Route path={"/privacy"} component={Privacy} />
