@@ -18,8 +18,6 @@ export const users = mysqlTable("users", {
   loginMethod: varchar("loginMethod", { length: 64 }),
   passwordHash: varchar("passwordHash", { length: 255 }),
   passwordChangedAt: timestamp("passwordChangedAt"),
-  failedLoginAttempts: int("failedLoginAttempts").default(0).notNull(),
-  lockedUntil: timestamp("lockedUntil"),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   accountStatus: mysqlEnum("accountStatus", ["active", "disabled", "suspended"]).default("active").notNull(),
   lastActivityAt: timestamp("lastActivityAt"),
@@ -30,6 +28,17 @@ export const users = mysqlTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+export const passwordResetTokens = mysqlTable("password_reset_tokens", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  tokenHash: varchar("tokenHash", { length: 64 }).notNull().unique(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
+
 
 // Workspaces
 export const workspaces = mysqlTable("workspaces", {
