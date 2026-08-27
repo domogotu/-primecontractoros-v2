@@ -29,6 +29,7 @@ import {
   dismissAiSuggestion,
   acceptAiSuggestion,
   getDb,
+  getInsertId,
 } from "./db";
 import { invokeLLM } from "./_core/llm";
 import {
@@ -405,7 +406,7 @@ export const appRouter = router({
             });
             proposalId = typeof proposalResult === "number"
               ? proposalResult
-              : Number((proposalResult as any)?.[0]?.insertId ?? (proposalResult as any)?.insertId);
+              : getInsertId(proposalResult);
             if (!proposalId) {
               throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Proposal creation did not return an insert id." });
             }
@@ -643,9 +644,9 @@ export const appRouter = router({
             });
           }
           const result = await createProposal({ ...input, workspaceId: wsId });
-          const insertId = (result as any)?.[0]?.insertId ?? (result as any)?.insertId;
+          const insertId = getInsertId(result);
           try { await logAudit(wsId, ctx.user.id, "create", "proposals", 0, input); } catch {}
-          return { success: true, id: insertId ? Number(insertId) : 0 };
+          return { success: true, id: insertId };
         } catch (error) {
           console.error("Error creating proposal:", error);
           throw error;
@@ -771,7 +772,7 @@ export const appRouter = router({
             });
             contractId = typeof contractResult === "number"
               ? contractResult
-              : Number((contractResult as any)?.[0]?.insertId ?? (contractResult as any)?.insertId);
+              : getInsertId(contractResult);
             if (!contractId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Contract creation did not return an insert id." });
             created = true;
           }
