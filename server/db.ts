@@ -8,6 +8,15 @@ import { ENV } from './_core/env';
 let _db: ReturnType<typeof drizzle> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
+export function getInsertId(result: unknown): number {
+  const header = Array.isArray(result) ? result[0] : result;
+  const insertId = Number((header as { insertId?: number | string } | undefined)?.insertId);
+  if (!Number.isFinite(insertId) || insertId <= 0) {
+    throw new Error("Database insert did not return a valid insertId");
+  }
+  return insertId;
+}
+
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
