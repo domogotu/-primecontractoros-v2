@@ -1,35 +1,10 @@
-import { drizzle } from "drizzle-orm/mysql2";
 import { and, eq, desc, like } from "drizzle-orm";
+import { getDb, getInsertId } from "./db";
 import {
   files, contacts, messages, invoices, payments, tasks, alerts,
   capabilityStatements, templates, closeoutRecords, lessonsLearned,
   lossReviews, deliverables, deadlines, obligations, complianceItems, notes
 } from "../drizzle/schema";
-import * as schema from "../drizzle/schema";
-
-let _db: ReturnType<typeof drizzle> | null = null;
-
-async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
-    try {
-      _db = drizzle(process.env.DATABASE_URL, { schema });
-    } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
-      _db = null;
-    }
-  }
-  return _db;
-}
-
-function getInsertId(result: unknown): number {
-  const header = Array.isArray(result) ? result[0] : result;
-  const insertId = Number((header as { insertId?: number | string } | undefined)?.insertId);
-  if (!Number.isFinite(insertId) || insertId <= 0) {
-    throw new Error("Database insert did not return a valid insertId");
-  }
-  return insertId;
-}
-
 // ==================== FILES ====================
 export async function listFiles(workspaceId: number, linkedRecordType?: string, linkedRecordId?: number) {
   const db = await getDb();
