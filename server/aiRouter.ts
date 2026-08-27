@@ -218,6 +218,102 @@ async function convertObligationToLiveRecord(
   }
 }
 
+
+async function approveFindingWithLock(
+  findingId: number,
+  workspaceId: number,
+  userId: number,
+  reason?: string,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async (tx) => {
+    const [finding] = await tx
+      .select()
+      .from(aiFindings)
+      .where(and(eq(aiFindings.id, findingId), eq(aiFindings.workspaceId, workspaceId)))
+      .for("update")
+      .limit(1);
+    if (!finding) throw new TRPCError({ code: "NOT_FOUND", message: "Finding not found" });
+
+    let createdRecordType = finding.approvedLiveObjectType ?? null;
+    let createdRecordId = finding.approvedLiveObjectId ?? null;
+    const updateData: Record<string, unknown> = {
+      reviewState: "approved",
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+    };
+
+    if (!createdRecordType || !createdRecordId) {
+      const result = await convertFindingToLiveRecord(finding, userId);
+      if (result) {
+        createdRecordType = result.recordType;
+        createdRecordId = result.recordId;
+        updateData.approvedLiveObjectType = result.recordType;
+        updateData.approvedLiveObjectId = result.recordId;
+      }
+    }
+
+    await tx.insert(aiFindingHistory).values({
+      findingId,
+      oldState: finding.reviewState,
+      newState: "approved",
+      changedBy: userId,
+      reason,
+    });
+    await tx.update(aiFindings).set(updateData).where(and(
+      eq(aiFindings.id, findingId),
+      eq(aiFindings.workspaceId, workspaceId),
+    ));
+
+    return { finding, oldState: finding.reviewState, createdRecordType, createdRecordId };
+  });
+}
+
+async function approveObligationWithLock(
+  obligationId: number,
+  workspaceId: number,
+  userId: number,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async (tx) => {
+    const [obligation] = await tx
+      .select()
+      .from(aiExtractedObligations)
+      .where(and(
+        eq(aiExtractedObligations.id, obligationId),
+        eq(aiExtractedObligations.workspaceId, workspaceId),
+      ))
+      .for("update")
+      .limit(1);
+    if (!obligation) throw new TRPCError({ code: "NOT_FOUND", message: "Obligation not found" });
+
+    const result = obligation.createdRecordId && obligation.createdRecordType
+      ? { recordType: obligation.createdRecordType, recordId: obligation.createdRecordId }
+      : await convertObligationToLiveRecord(obligation, userId);
+
+    const updateData: Record<string, unknown> = {
+      approvalState: "approved",
+      approvedBy: userId,
+      approvedAt: new Date(),
+    };
+    if (result && !obligation.createdRecordId) {
+      updateData.createdRecordType = result.recordType;
+      updateData.createdRecordId = result.recordId;
+    }
+
+    await tx.update(aiExtractedObligations).set(updateData).where(and(
+      eq(aiExtractedObligations.id, obligationId),
+      eq(aiExtractedObligations.workspaceId, workspaceId),
+    ));
+
+    return { obligation, result };
+  });
+}
+
 export const aiRouter = router({
   // ============================================================
   // AI Runs
@@ -366,105 +462,82 @@ export const aiRouter = router({
         reason: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const db = await getDb();
         const workspaceId = await requireActiveWorkspace(ctx);
+
+        if (input.newState === "approved") {
+          const approved = await approveFindingWithLock(
+            input.findingId,
+            workspaceId,
+            ctx.user.id,
+            input.reason,
+          );
+          try {
+            await logAudit(workspaceId, ctx.user.id, "update", "aiFinding", input.findingId, {
+              action: "approved",
+              reason: input.reason,
+              createdRecordType: approved.createdRecordType,
+              createdRecordId: approved.createdRecordId,
+            });
+          } catch {}
+          return {
+            success: true,
+            oldState: approved.oldState,
+            newState: input.newState,
+            createdRecordType: approved.createdRecordType,
+            createdRecordId: approved.createdRecordId,
+          };
+        }
+
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
         const finding = await requireFindingInWorkspace(input.findingId, workspaceId);
-
-        const oldState = finding.reviewState;
-
-        // Log history
-        await db!.insert(aiFindingHistory).values({
+        await db.insert(aiFindingHistory).values({
           findingId: input.findingId,
-          oldState,
+          oldState: finding.reviewState,
           newState: input.newState,
           changedBy: ctx.user.id,
           reason: input.reason,
         });
-
-        const updateData: any = { reviewState: input.newState };
-        let createdRecordType: string | null = null;
-        let createdRecordId: number | null = null;
-
-        if (input.newState === "approved") {
-          updateData.reviewedBy = ctx.user.id;
-          updateData.reviewedAt = new Date();
-
-          // Create the live downstream record only once. Re-approval is idempotent.
-          if (finding.approvedLiveObjectId && finding.approvedLiveObjectType) {
-            createdRecordType = finding.approvedLiveObjectType;
-            createdRecordId = finding.approvedLiveObjectId;
-          } else {
-            const result = await convertFindingToLiveRecord(finding, ctx.user.id);
-            if (result) {
-              createdRecordType = result.recordType;
-              createdRecordId = result.recordId;
-              updateData.approvedLiveObjectType = result.recordType;
-              updateData.approvedLiveObjectId = result.recordId;
-            }
-          }
-
-          try {
-            await logAudit(finding.workspaceId, ctx.user.id, "update", "aiFinding", input.findingId, {
-              action: "approved", reason: input.reason, createdRecordType, createdRecordId,
-            });
-          } catch {}
-        }
-
-        await db!.update(aiFindings).set(updateData).where(and(eq(aiFindings.id, input.findingId), eq(aiFindings.workspaceId, workspaceId)));
-        return { success: true, oldState, newState: input.newState, createdRecordType, createdRecordId };
+        await db.update(aiFindings).set({ reviewState: input.newState }).where(and(
+          eq(aiFindings.id, input.findingId),
+          eq(aiFindings.workspaceId, workspaceId),
+        ));
+        return {
+          success: true,
+          oldState: finding.reviewState,
+          newState: input.newState,
+          createdRecordType: null,
+          createdRecordId: null,
+        };
       }),
 
     bulkApprove: protectedProcedure
       .input(z.object({ findingIds: z.array(z.number()) }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const db = await getDb();
         const workspaceId = await requireActiveWorkspace(ctx);
         const results: Array<{ findingId: number; recordType: string | null; recordId: number | null }> = [];
 
         for (const id of input.findingIds) {
-          let finding;
-          try { finding = await requireFindingInWorkspace(id, workspaceId); } catch { continue; }
-
-          await db!.insert(aiFindingHistory).values({
-            findingId: id,
-            oldState: finding.reviewState ?? "unreviewed",
-            newState: "approved",
-            changedBy: ctx.user.id,
-            reason: "Bulk approved",
-          });
-
-          const updateData: any = { reviewState: "approved", reviewedBy: ctx.user.id, reviewedAt: new Date() };
-          let createdRecordType: string | null = null;
-          let createdRecordId: number | null = null;
-
-          // Create the live downstream record only once. Bulk re-approval is idempotent.
-          if (finding.approvedLiveObjectId && finding.approvedLiveObjectType) {
-            createdRecordType = finding.approvedLiveObjectType;
-            createdRecordId = finding.approvedLiveObjectId;
-          } else {
-            const result = await convertFindingToLiveRecord(finding, ctx.user.id);
-            if (result) {
-              createdRecordType = result.recordType;
-              createdRecordId = result.recordId;
-              updateData.approvedLiveObjectType = result.recordType;
-              updateData.approvedLiveObjectId = result.recordId;
-            }
-          }
-
-          await db!.update(aiFindings).set(updateData).where(and(eq(aiFindings.id, id), eq(aiFindings.workspaceId, workspaceId)));
-
           try {
-            await logAudit(finding.workspaceId, ctx.user.id, "update", "aiFinding", id, {
-              action: "bulk_approved", createdRecordType, createdRecordId,
+            const approved = await approveFindingWithLock(id, workspaceId, ctx.user.id, "Bulk approved");
+            try {
+              await logAudit(workspaceId, ctx.user.id, "update", "aiFinding", id, {
+                action: "bulk_approved",
+                createdRecordType: approved.createdRecordType,
+                createdRecordId: approved.createdRecordId,
+              });
+            } catch {}
+            results.push({
+              findingId: id,
+              recordType: approved.createdRecordType,
+              recordId: approved.createdRecordId,
             });
-          } catch {}
-
-          results.push({ findingId: id, recordType: createdRecordType, recordId: createdRecordId });
+          } catch {
+            continue;
+          }
         }
 
-        return { success: true, count: input.findingIds.length, results };
+        return { success: true, count: results.length, results };
       }),
 
     markStale: protectedProcedure
@@ -550,35 +623,22 @@ export const aiRouter = router({
     approve: protectedProcedure
       .input(z.object({ obligationId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const db = await getDb();
         const workspaceId = await requireActiveWorkspace(ctx);
-        const obligation = await requireObligationInWorkspace(input.obligationId, workspaceId);
-
-        // Create the live downstream record only once. Re-approval is idempotent.
-        const result = obligation.createdRecordId && obligation.createdRecordType
-          ? { recordType: obligation.createdRecordType, recordId: obligation.createdRecordId }
-          : await convertObligationToLiveRecord(obligation, ctx.user.id);
-
-        const updateData: any = {
-          approvalState: "approved",
-          approvedBy: ctx.user.id,
-          approvedAt: new Date(),
-        };
-        if (result && !obligation.createdRecordId) {
-          updateData.createdRecordType = result.recordType;
-          updateData.createdRecordId = result.recordId;
-        }
-
-        await db!.update(aiExtractedObligations).set(updateData).where(and(eq(aiExtractedObligations.id, input.obligationId), eq(aiExtractedObligations.workspaceId, workspaceId)));
+        const approved = await approveObligationWithLock(input.obligationId, workspaceId, ctx.user.id);
 
         try {
-          await logAudit(obligation.workspaceId, ctx.user.id, "update", "aiObligation", input.obligationId, {
-            action: "approved", createdRecordType: result?.recordType ?? null, createdRecordId: result?.recordId ?? null,
+          await logAudit(workspaceId, ctx.user.id, "update", "aiObligation", input.obligationId, {
+            action: "approved",
+            createdRecordType: approved.result?.recordType ?? null,
+            createdRecordId: approved.result?.recordId ?? null,
           });
         } catch {}
 
-        return { success: true, createdRecordType: result?.recordType ?? null, createdRecordId: result?.recordId ?? null };
+        return {
+          success: true,
+          createdRecordType: approved.result?.recordType ?? null,
+          createdRecordId: approved.result?.recordId ?? null,
+        };
       }),
 
     reject: protectedProcedure
@@ -596,38 +656,30 @@ export const aiRouter = router({
     bulkApprove: protectedProcedure
       .input(z.object({ obligationIds: z.array(z.number()) }))
       .mutation(async ({ ctx, input }) => {
-        await requireActiveWorkspace(ctx, (input as any)?.workspaceId);
-        const db = await getDb();
         const workspaceId = await requireActiveWorkspace(ctx);
         const results: Array<{ obligationId: number; recordType: string | null; recordId: number | null }> = [];
 
         for (const id of input.obligationIds) {
-          let obligation;
-          try { obligation = await requireObligationInWorkspace(id, workspaceId); } catch { continue; }
-
-          // Create the live downstream record only once. Bulk re-approval is idempotent.
-          const result = obligation.createdRecordId && obligation.createdRecordType
-            ? { recordType: obligation.createdRecordType, recordId: obligation.createdRecordId }
-            : await convertObligationToLiveRecord(obligation, ctx.user.id);
-
-          const updateData: any = { approvalState: "approved", approvedBy: ctx.user.id, approvedAt: new Date() };
-          if (result && !obligation.createdRecordId) {
-            updateData.createdRecordType = result.recordType;
-            updateData.createdRecordId = result.recordId;
-          }
-
-          await db!.update(aiExtractedObligations).set(updateData).where(and(eq(aiExtractedObligations.id, id), eq(aiExtractedObligations.workspaceId, workspaceId)));
-
           try {
-            await logAudit(obligation.workspaceId, ctx.user.id, "update", "aiObligation", id, {
-              action: "bulk_approved", createdRecordType: result?.recordType ?? null, createdRecordId: result?.recordId ?? null,
+            const approved = await approveObligationWithLock(id, workspaceId, ctx.user.id);
+            try {
+              await logAudit(workspaceId, ctx.user.id, "update", "aiObligation", id, {
+                action: "bulk_approved",
+                createdRecordType: approved.result?.recordType ?? null,
+                createdRecordId: approved.result?.recordId ?? null,
+              });
+            } catch {}
+            results.push({
+              obligationId: id,
+              recordType: approved.result?.recordType ?? null,
+              recordId: approved.result?.recordId ?? null,
             });
-          } catch {}
-
-          results.push({ obligationId: id, recordType: result?.recordType ?? null, recordId: result?.recordId ?? null });
+          } catch {
+            continue;
+          }
         }
 
-        return { success: true, count: input.obligationIds.length, results };
+        return { success: true, count: results.length, results };
       }),
   }),
 
