@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
-import { getContract, getDb } from "./db";
+import { getContract, getDb, getInsertId } from "./db";
 import { enforceAction } from "./rbacMiddleware";
 import { requireWorkspaceId } from "./workspaceMiddleware";
 import { logAudit } from "./featureRouter";
@@ -147,14 +147,14 @@ export const financeCloseoutRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available." });
       const [existing] = await db.select().from(closeoutRecords).where(and(eq(closeoutRecords.workspaceId, wsId), eq(closeoutRecords.contractId, input.contractId))).limit(1);
       if (existing) return { success: true, closeoutId: existing.id, reused: true };
-      const result: any = await db.insert(closeoutRecords).values({
+      const result = await db.insert(closeoutRecords).values({
         workspaceId: wsId,
         contractId: input.contractId,
         status: "in_progress",
         initiatedBy: ctx.user.id,
         notes: input.notes,
       });
-      const closeoutId = Number(result?.[0]?.insertId ?? result?.insertId ?? 0);
+      const closeoutId = getInsertId(result);
       try { await logAudit(wsId, ctx.user.id, "create", "closeout", closeoutId, { contractId: input.contractId }); } catch {}
       return { success: true, closeoutId, reused: false };
     }),
