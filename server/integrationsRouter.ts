@@ -2,7 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { requireWorkspaceId } from "./workspaceMiddleware";
 import { logAudit } from "./featureRouter";
-import { getDb } from "./db";
+import { getDb, getInsertId } from "./db";
 import {
   files,
   fileVersions,
@@ -97,7 +97,7 @@ export const fileStorageRouter = router({
       } as any);
 
       try { await logAudit(workspaceId, ctx.user.id, "create", "fileStorage", 0, { fileName: input.fileName, size: buffer.length }); } catch {}
-      return { id: result.insertId, fileKey, url };
+      return { id: getInsertId(result), fileKey, url };
     }),
 
   getDownloadUrl: protectedProcedure
@@ -198,7 +198,7 @@ export const fileStorageRouter = router({
             uploadedBy: ctx.user?.id || null,
             storageProvider: s3Config ? "s3" : "built-in",
           } as any);
-          results.push({ fileName: fileInput.fileName, id: result.insertId });
+          results.push({ fileName: fileInput.fileName, id: getInsertId(result) });
         } catch (err: any) {
           results.push({ fileName: fileInput.fileName, error: err.message || "Upload failed" });
         }
@@ -865,7 +865,7 @@ export const templatesRouter = router({
       if (!db) throw new Error("Database not available");
       const [result] = await db.insert(templates).values({ workspaceId, ...input });
       try { await logAudit(workspaceId, ctx.user.id, "create", "templates", 0, input); } catch {}
-      return { id: result.insertId };
+      return { id: getInsertId(result) };
     }),
 
   update: protectedProcedure
@@ -911,7 +911,7 @@ export const templatesRouter = router({
         content: defaultTemplate.content,
       });
       try { await logAudit(workspaceId, ctx.user.id, "delete", "templates", 0, null); } catch {}
-      return { id: result.insertId };
+      return { id: getInsertId(result) };
     }),
 });
 
@@ -990,7 +990,7 @@ export const closeoutRouter = router({
         initiatedBy: ctx.user?.id || null,
       });
 
-      const closeoutId = Number(record.insertId);
+      const closeoutId = getInsertId(record);
 
       // Create default checklist items (FAR 4.804 compliant)
       const defaultItems = [
@@ -1113,7 +1113,7 @@ export const closeoutRouter = router({
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
         sortOrder: 99,
       });
-      return { id: result.insertId };
+      return { id: getInsertId(result) };
     }),
 
   // ===== BLOCKERS =====
@@ -1147,8 +1147,8 @@ export const closeoutRouter = router({
         owner: input.owner || null,
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
       });
-      try { await logAudit(workspaceId, ctx.user.id, "create", "closeoutBlocker", Number(result.insertId), { title: input.title }); } catch {}
-      return { id: result.insertId };
+      try { await logAudit(workspaceId, ctx.user.id, "create", "closeoutBlocker", getInsertId(result), { title: input.title }); } catch {}
+      return { id: getInsertId(result) };
     }),
 
   resolveBlocker: protectedProcedure
@@ -1250,8 +1250,8 @@ export const closeoutRouter = router({
         description: input.description || null,
         uploadedBy: ctx.user?.id || null,
       });
-      try { await logAudit(workspaceId, ctx.user.id, "create", "closeoutEvidence", Number(result.insertId), { title: input.title }); } catch {}
-      return { id: result.insertId };
+      try { await logAudit(workspaceId, ctx.user.id, "create", "closeoutEvidence", getInsertId(result), { title: input.title }); } catch {}
+      return { id: getInsertId(result) };
     }),
 
   removeEvidence: protectedProcedure
@@ -1573,7 +1573,7 @@ export const lessonsLearnedRouter = router({
         tags: input.tags || null,
       });
       try { await logAudit(workspaceId, ctx.user.id, "create", "lessonsLearned", 0, input); } catch {}
-      return { id: result.insertId };
+      return { id: getInsertId(result) };
     }),
 
   update: protectedProcedure
@@ -1714,10 +1714,10 @@ export const lessonsLearnedRouter = router({
         linkedRecordId: lesson.id,
       });
       // Link task back to lesson
-      await db.update(lessonsLearned).set({ createdTaskId: taskResult.insertId })
+      await db.update(lessonsLearned).set({ createdTaskId: getInsertId(taskResult) })
         .where(eq(lessonsLearned.id, input.lessonId));
-      try { await logAudit(workspaceId, ctx.user.id, "create", "tasks", Number(taskResult.insertId), { source: "lesson", lessonId: input.lessonId }); } catch {}
-      return { success: true, taskId: taskResult.insertId };
+      try { await logAudit(workspaceId, ctx.user.id, "create", "tasks", Number(getInsertId(taskResult)), { source: "lesson", lessonId: input.lessonId }); } catch {}
+      return { success: true, taskId: getInsertId(taskResult) };
     }),
 
   // Get stats/counts for the lessons page header
@@ -1802,7 +1802,7 @@ export const capabilityRouter = router({
         status: "draft",
       });
       try { await logAudit(workspaceId, ctx.user.id, "create", "capability", 0, input); } catch {}
-      return { id: result.insertId };
+      return { id: getInsertId(result) };
     }),
 
   update: protectedProcedure
