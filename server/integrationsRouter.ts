@@ -1344,62 +1344,64 @@ export const closeoutRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
-      const [ownedCloseout] = await db
-        .select({ id: closeoutRecords.id })
-        .from(closeoutRecords)
-        .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)))
-        .limit(1);
-      if (!ownedCloseout) throw new Error("Closeout record not found in this workspace");
+      await db.transaction(async (tx) => {
+        const [ownedCloseout] = await tx
+          .select({ id: closeoutRecords.id, contractId: closeoutRecords.contractId })
+          .from(closeoutRecords)
+          .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)))
+          .limit(1);
+        if (!ownedCloseout) throw new Error("Closeout record not found in this workspace");
 
-      // If trying to complete, enforce blocker check
-      if (input.status === "completed") {
-        const items = await db.select().from(closeoutChecklistItems).where(eq(closeoutChecklistItems.closeoutId, input.closeoutId));
-        const requiredItems = items.filter(i => i.required);
-        const requiredIncomplete = requiredItems.filter(i => !i.completed);
-        if (requiredIncomplete.length > 0) {
-          throw new Error(`Cannot complete closeout: ${requiredIncomplete.length} required item(s) are still incomplete.`);
-        }
+        if (input.status === "completed") {
+          const items = await tx.select().from(closeoutChecklistItems)
+            .where(eq(closeoutChecklistItems.closeoutId, input.closeoutId));
+          const requiredIncomplete = items.filter(item => item.required && !item.completed);
+          if (requiredIncomplete.length > 0) {
+            throw new Error(`Cannot complete closeout: ${requiredIncomplete.length} required item(s) are still incomplete.`);
+          }
 
-        const blockers = await db.select().from(closeoutBlockingItems).where(and(eq(closeoutBlockingItems.closeoutId, input.closeoutId), eq(closeoutBlockingItems.workspaceId, workspaceId)));
-        const openBlockers = blockers.filter(b => b.status === "open");
-        if (openBlockers.length > 0) {
-          throw new Error(`Cannot complete closeout: ${openBlockers.length} unresolved blocker(s) remain. Resolve or waive them first.`);
-        }
-      }
+          const blockers = await tx.select().from(closeoutBlockingItems).where(and(
+            eq(closeoutBlockingItems.closeoutId, input.closeoutId),
+            eq(closeoutBlockingItems.workspaceId, workspaceId),
+          ));
+          const openBlockers = blockers.filter(blocker => blocker.status === "open");
+          if (openBlockers.length > 0) {
+            throw new Error(`Cannot complete closeout: ${openBlockers.length} unresolved blocker(s) remain. Resolve or waive them first.`);
+          }
 
-      await db
-        .update(closeoutRecords)
-        .set({
-          status: input.status,
-          completedAt: input.status === "completed" ? new Date() : null,
-          completedBy: input.status === "completed" ? ctx.user?.id || null : null,
-        })
-        .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)));
+          if (ownedCloseout.contractId) {
+            const lessonTaskTitle = "Capture lessons learned before final contract closure";
+            const [existingLessonTask] = await tx.select({ id: tasks.id }).from(tasks).where(and(
+              eq(tasks.workspaceId, workspaceId),
+              eq(tasks.linkedRecordType, "contract"),
+              eq(tasks.linkedRecordId, ownedCloseout.contractId),
+              eq(tasks.title, lessonTaskTitle),
+              isNull(tasks.deletedAt),
+            )).limit(1);
 
-      if (input.status === "completed") {
-        const [closeoutRecord] = await db.select({ contractId: closeoutRecords.contractId }).from(closeoutRecords)
-          .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId))).limit(1);
-        if (closeoutRecord?.contractId) {
-          const lessonTaskTitle = "Capture lessons learned before final contract closure";
-          const [existingLessonTask] = await db.select({ id: tasks.id }).from(tasks).where(and(
-            eq(tasks.workspaceId, workspaceId),
-            eq(tasks.linkedRecordType, "contract"),
-            eq(tasks.linkedRecordId, closeoutRecord.contractId),
-            eq(tasks.title, lessonTaskTitle),
-          )).limit(1);
-          if (!existingLessonTask) {
-            await db.insert(tasks).values({
-              workspaceId,
-              title: lessonTaskTitle,
-              description: "Closeout is complete. Review performance, subcontractor execution, compliance, billing, communication, risks, and reusable improvements. Record lessons before marking the contract Closed.",
-              linkedRecordType: "contract",
-              linkedRecordId: closeoutRecord.contractId,
-              priority: "medium",
-              status: "todo",
-            });
+            if (!existingLessonTask) {
+              await tx.insert(tasks).values({
+                workspaceId,
+                title: lessonTaskTitle,
+                description: "Closeout is complete. Review performance, subcontractor execution, compliance, billing, communication, risks, and reusable improvements. Record lessons before marking the contract Closed.",
+                linkedRecordType: "contract",
+                linkedRecordId: ownedCloseout.contractId,
+                priority: "medium",
+                status: "todo",
+              });
+            }
           }
         }
-      }
+
+        await tx
+          .update(closeoutRecords)
+          .set({
+            status: input.status,
+            completedAt: input.status === "completed" ? new Date() : null,
+            completedBy: input.status === "completed" ? ctx.user?.id || null : null,
+          })
+          .where(and(eq(closeoutRecords.id, input.closeoutId), eq(closeoutRecords.workspaceId, workspaceId)));
+      });
 
       try { await logAudit(workspaceId, ctx.user.id, "update", "closeout", input.closeoutId, { status: input.status }); } catch {}
       return { success: true };
