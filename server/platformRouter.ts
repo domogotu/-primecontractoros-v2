@@ -1,6 +1,6 @@
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
-import { getDb } from "./db";
+import { getDb, getInsertId } from "./db";
 import { workspaces, businessProfiles, plans, discounts, platformBilling, supportTickets, platformOverrides, users, loginEvents, platformNotes, platformAuditLog, workspaceMembers, planVersions, policyVersions, backupExports, platformTasks, platformTaskRuns, billingEvents, discountUsage, consentRecords, auditLogs } from "../drizzle/schema";
 import { eq, desc, and, sql, count } from "drizzle-orm";
 import { sendWelcomeEmail } from "./services/email";
@@ -42,7 +42,7 @@ export const workspaceRouter = router({
       ownerId: userId,
       onboardingCompleted: false,
     });
-    const insertId = result[0].insertId;
+    const insertId = getInsertId(result);
     const [newWs] = await db.select().from(workspaces).where(eq(workspaces.id, insertId)).limit(1);
 
     // For new workspaces, set initial access state to pending_setup
@@ -122,8 +122,8 @@ export const workspaceRouter = router({
           naicsCodes: input.naicsCodes || null,
           certifications: input.certifications || null,
         });
-        await syncBusinessProfile(result[0].insertId);
-        return { success: true, workspaceId: result[0].insertId };
+        await syncBusinessProfile(getInsertId(result));
+        return { success: true, workspaceId: getInsertId(result) };
       }
       // Update existing workspace
       await db.update(workspaces)
