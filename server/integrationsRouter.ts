@@ -33,6 +33,7 @@ import { sendEmail, getEmailConfig, EMAIL_TEMPLATES, sendWelcomeEmail } from "./
 import { getPlatformStripeConfig, getWorkspacePlanLimits, getSubscriptionStatus, createCheckoutSession, checkPlanLimit } from "./services/billing";
 import { storagePut } from "./storage";
 import { updateAccessState, evaluateAccess, logBillingAudit } from "./accessGating";
+import { resolveLessonLinkState } from "./lessonsLinkState";
 
 // ===== FILE STORAGE ROUTER =====
 export const fileStorageRouter = router({
@@ -1593,7 +1594,7 @@ export const lessonsLearnedRouter = router({
       whatDidNotWork: z.string().optional(),
       actionTaken: z.string().optional(),
       preventionSteps: z.string().optional(),
-      linkedRecordType: z.enum(["contract", "proposal", "opportunity"]).optional(),
+      linkedRecordType: z.enum(["contract", "proposal", "opportunity"]).nullable().optional(),
       linkedRecordId: z.number().nullable().optional(),
       linkedRecordTitle: z.string().nullable().optional(),
       status: z.enum(["draft", "active", "archived", "applied"]).optional(),
@@ -1615,8 +1616,16 @@ export const lessonsLearnedRouter = router({
           .limit(1);
         if (!existingLesson) throw new Error("Lesson not found.");
 
-        const nextType = input.linkedRecordType ?? existingLesson.linkedRecordType;
-        const nextId = input.linkedRecordId ?? existingLesson.linkedRecordId;
+        const { linkedRecordType: nextType, linkedRecordId: nextId } = resolveLessonLinkState(
+          {
+            linkedRecordType: existingLesson.linkedRecordType as "contract" | "proposal" | "opportunity" | null,
+            linkedRecordId: existingLesson.linkedRecordId,
+          },
+          {
+            linkedRecordType: input.linkedRecordType,
+            linkedRecordId: input.linkedRecordId,
+          },
+        );
         if (nextType && nextId) {
           if (nextType === "contract") {
             const [owned] = await db.select({ id: contracts.id }).from(contracts)
