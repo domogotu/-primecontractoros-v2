@@ -15,7 +15,7 @@ import {
   checkForDuplicate,
 } from "./services/samImport";
 import { requireWorkspaceId } from "./workspaceMiddleware";
-import { getDb } from "./db";
+import { getDb, getInsertId } from "./db";
 import { opportunities, samImportLogs, opportunitySourceFiles, opportunityImportRuns } from "../drizzle/schema";
 import { logAudit } from "./featureRouter";
 import { eq, and, isNull, desc } from "drizzle-orm";
