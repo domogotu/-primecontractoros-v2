@@ -1,6 +1,6 @@
 import { router, protectedProcedure } from "./_core/trpc";
 import { z } from "zod";
-import { getDb } from "./db";
+import { getDb, getInsertId } from "./db";
 import { eq, and, desc, sql } from "drizzle-orm";
 import {
   contextualHelpItems,
@@ -479,7 +479,7 @@ export const aiSuggestionsEnhancedRouter = router({
       if (!suggestion) throw new Error("Suggestion not found");
 
       // Create a task from it
-      const [result] = await db.insert(tasks).values({
+      const result = await db.insert(tasks).values({
         workspaceId,
         title: suggestion.suggestionTitle,
         description: suggestion.suggestionText,
@@ -492,10 +492,10 @@ export const aiSuggestionsEnhancedRouter = router({
       // Update suggestion status
       await db
         .update(aiSuggestions)
-        .set({ status: "completed", createdTaskId: result?.insertId || null })
+        .set({ status: "completed", createdTaskId: getInsertId(result) })
         .where(eq(aiSuggestions.id, input.suggestionId));
 
-      return { success: true, taskId: result?.insertId };
+      return { success: true, taskId: getInsertId(result) };
     }),
 
   // Accept suggestion
@@ -625,25 +625,25 @@ export const aiFindingsEnhancedRouter = router({
       let objectId: number | undefined;
 
       if (input.objectType === "requirement") {
-        const [result] = await db.insert(contractRequirements).values({
+        const result = await db.insert(contractRequirements).values({
           workspaceId,
           contractId: input.contractId,
           title: input.title,
           description: input.description || "",
           aiFindingId: input.findingId,
         });
-        objectId = result?.insertId;
+        objectId = getInsertId(result);
       } else if (input.objectType === "deliverable") {
-        const [result] = await db.insert(deliverables).values({
+        const result = await db.insert(deliverables).values({
           workspaceId,
           contractId: input.contractId,
           title: input.title,
           description: input.description || "",
           dueDate: input.dueDate ? new Date(input.dueDate) : null,
         });
-        objectId = result?.insertId;
+        objectId = getInsertId(result);
       } else if (input.objectType === "deadline") {
-        const [result] = await db.insert(deadlines).values({
+        const result = await db.insert(deadlines).values({
           workspaceId,
           title: input.title,
           description: input.description || "",
@@ -651,15 +651,15 @@ export const aiFindingsEnhancedRouter = router({
           linkedRecordType: "contract",
           linkedRecordId: input.contractId,
         });
-        objectId = result?.insertId;
+        objectId = getInsertId(result);
       } else if (input.objectType === "compliance_item") {
-        const [result] = await db.insert(complianceItems).values({
+        const result = await db.insert(complianceItems).values({
           workspaceId,
           contractId: input.contractId,
           title: input.title,
           description: input.description || "",
         });
-        objectId = result?.insertId;
+        objectId = getInsertId(result);
       }
 
       // Update finding with live object reference
