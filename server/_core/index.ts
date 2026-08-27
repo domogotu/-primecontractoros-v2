@@ -5,6 +5,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { COOKIE_NAME } from "@shared/const";
 import { registerOAuthRoutes } from "./oauth";
+import { ensureOwnerCredentials, registerCredentialRoutes } from "./credentials";
 import { validateProductionCoreEnv } from "./env";
 import { logOwnerBootstrapDiagnostic } from "./ownerBootstrapDiagnostic";
 import { getSessionCookieOptions } from "./cookies";
@@ -42,6 +43,7 @@ async function startServer() {
   // Temporary, read-only diagnostic used to identify the freshly-created
   // platform-owner OAuth identity after the production factory reset.
   await logOwnerBootstrapDiagnostic();
+  await ensureOwnerCredentials();
 
   const app = express();
   const server = createServer(app);
@@ -73,9 +75,11 @@ async function startServer() {
   app.use(exportRouter);
   // Rate limiting on auth endpoints
   app.use("/api/oauth", authRateLimit);
+  app.use("/api/auth", authRateLimit);
   // API rate limiting
   app.use("/api/trpc", apiRateLimit);
   registerStorageProxy(app);
+  registerCredentialRoutes(app);
   registerOAuthRoutes(app);
   // Scheduled endpoints (heartbeat cron callbacks)
   app.post("/api/scheduled/email-scan", emailScanHandler);
