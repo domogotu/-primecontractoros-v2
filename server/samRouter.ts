@@ -722,8 +722,7 @@ if (fetchResult.attachments && fetchResult.attachments.length > 0) {
 
 function resolveInsertId(result: unknown): number {
   if (typeof result === "number") return result;
-  const anyResult = result as any;
-  return Number(anyResult?.[0]?.insertId ?? anyResult?.insertId ?? 0);
+  return getInsertId(result);
 }
 
 
