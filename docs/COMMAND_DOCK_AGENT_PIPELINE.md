@@ -84,3 +84,25 @@ The proposal is stored with `approvalStatus=pending`. Users can approve or rejec
 
 This preserves the review-first architecture:
 `intent -> context -> agent -> Ollama -> result -> proposed action -> human approval -> separate execution`.
+
+
+## Full execution lifecycle
+
+The governed action lifecycle is now modeled as:
+
+**Agent proposes → Human approves → Execution preview → Explicit execution authorization → Execute → Verify result → Audit**
+
+State transitions:
+- `not_required` / `pending` → proposal decision
+- `approved` → `preview_ready`
+- `preview_ready` → `authorized`
+- `authorized` → execution attempt
+- execution attempt → `verified` or `failed`
+
+The execution endpoint will not perform an action unless a registered execution adapter exists for the proposed action type. Approval and authorization alone never execute an external action.
+
+Current adapter status: **not registered**. This is intentional until each domain mutation has its own authorization, validation, idempotency, rollback/error handling, and audit implementation.
+
+## Windows development launcher
+
+The development command now uses `scripts/dev.mjs` rather than embedding Unix-style `NODE_ENV=development` syntax in `package.json`. The launcher sets the environment inside Node and starts `tsx` with `windowsHide: true` on Windows, reducing terminal-window flashing caused by shell-based startup.
