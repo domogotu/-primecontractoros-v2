@@ -11,6 +11,9 @@ export const ENV = {
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434",
+  ollamaModel: process.env.OLLAMA_MODEL ?? "llama3.2:3b",
+  ollamaTimeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS ?? 45000),
 };
 
 const REQUIRED_PRODUCTION_ENV: Array<[string, string]> = [
