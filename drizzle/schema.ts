@@ -2503,3 +2503,32 @@ export const glossaryTerms = mysqlTable("glossary_terms", {
 });
 export type GlossaryTerm = typeof glossaryTerms.$inferSelect;
 export type InsertGlossaryTerm = typeof glossaryTerms.$inferInsert;
+
+
+// ==================== AGENT ORCHESTRATION ====================
+// Durable execution record for Command Dock -> intent -> agent -> Ollama -> result -> audit -> UI.
+// This table deliberately complements aiRuns: aiRuns records model work, while agentRuns records
+// the governed agent execution envelope and its user-visible result.
+export const agentRuns = mysqlTable("agent_runs", {
+  id: int("id").autoincrement().primaryKey(),
+  workspaceId: int("workspaceId").notNull(),
+  platformOwnerOnly: boolean("platformOwnerOnly").default(false).notNull(),
+  relatedRecordType: varchar("relatedRecordType", { length: 64 }),
+  relatedRecordId: int("relatedRecordId"),
+  agentType: varchar("agentType", { length: 100 }).notNull(),
+  status: mysqlEnum("status", ["queued", "processing", "completed", "failed", "blocked"]).default("queued").notNull(),
+  priority: mysqlEnum("priority", ["low", "medium", "high", "critical"]).default("medium").notNull(),
+  sourceTrigger: varchar("sourceTrigger", { length: 100 }).notNull().default("command_dock"),
+  createdBy: int("createdBy").notNull(),
+  assignedTo: int("assignedTo"),
+  intent: text("intent").notNull(),
+  result: text("result"),
+  modelUsed: varchar("modelUsed", { length: 150 }),
+  errorMessage: text("errorMessage"),
+  auditLogId: int("auditLogId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  completedAt: timestamp("completedAt"),
+});
+export type AgentRun = typeof agentRuns.$inferSelect;
+export type InsertAgentRun = typeof agentRuns.$inferInsert;
