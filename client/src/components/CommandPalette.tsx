@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
+import AgentActivityPanel from "@/components/AgentActivityPanel";
 import { Input } from "@/components/ui/input";
 import {
   Search, Plus, FileText, Briefcase, FolderOpen, Users,
@@ -72,8 +73,10 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
   const handleRunIntent = async () => {
     const intent = query.trim();
     if (intent.length < 3 || executeAgent.isPending) return;
-    const relatedRecordType = location.startsWith("/app/") ? location.split("/")[2] : undefined;
-    const response = await executeAgent.mutateAsync({ intent, relatedRecordType });
+    const parts = location.split("/").filter(Boolean);
+    const relatedRecordType = parts[0] === "app" ? parts[1] : undefined;
+    const relatedRecordId = parts[2] && /^\\d+$/.test(parts[2]) ? Number(parts[2]) : undefined;
+    const response = await executeAgent.mutateAsync({ intent, relatedRecordType, relatedRecordId });
     setAgentResult(response);
   };
 
@@ -121,6 +124,10 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
     }
   };
 
+  const recordParts = location.split("/").filter(Boolean);
+  const currentRecordType = recordParts[0] === "app" ? recordParts[1] : undefined;
+  const currentRecordId = recordParts[2] && /^\\d+$/.test(recordParts[2]) ? Number(recordParts[2]) : undefined;
+
   const groupedCommands = useMemo(() => {
     const groups: Record<string, CommandItem[]> = { navigate: [], create: [], action: [] };
     filteredCommands.forEach(cmd => {
@@ -146,6 +153,38 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
             className="border-0 shadow-none focus-visible:ring-0"
           />
         </div>
+
+        {/* Governed Agent Lane */}
+          <div className="border-b px-4 py-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles className="h-4 w-4" />
+              <div>
+                <p className="text-sm font-semibold">Run a governed agent intent</p>
+                <p className="text-[11px] text-muted-foreground">Intent → record context → agent → Ollama → result → audit</p>
+              </div>
+            </div>
+            <button
+              className="w-full rounded-md border px-3 py-2 text-left hover:bg-muted/50 disabled:opacity-50"
+              onClick={handleRunIntent}
+              disabled={query.trim().length < 3 || executeAgent.isPending}
+            >
+              <span className="text-xs font-medium inline-flex items-center gap-2">
+                {executeAgent.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                {executeAgent.isPending ? "Running agent…" : "Run current intent"}
+              </span>
+            </button>
+            {agentResult && (
+              <div className="mt-3 rounded-md border p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">{agentResult.agentType}</p>
+                  <span className="text-[10px] uppercase text-muted-foreground">{agentResult.status}</span>
+                </div>
+                {agentResult.error && <p className="text-xs text-destructive mt-2">{agentResult.error}</p>}
+                {agentResult.result && <p className="text-xs whitespace-pre-wrap mt-2">{agentResult.result}</p>}
+                <p className="text-[10px] text-muted-foreground mt-2">Run #{agentResult.agentRunId} · approval gate applies to proposed actions</p>
+              </div>
+            )}
+          </div>
 
         {/* Commands List */}
         <div className="max-h-[400px] overflow-y-auto py-2">
@@ -195,6 +234,8 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
             </div>
           )}
         </div>
+
+        <AgentActivityPanel relatedRecordType={currentRecordType} relatedRecordId={currentRecordId} compact />
 
         {/* Footer */}
         <div className="border-t px-4 py-2 flex items-center justify-between text-[10px] text-muted-foreground">
