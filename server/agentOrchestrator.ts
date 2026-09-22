@@ -1,7 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { requireWorkspaceId } from "./workspaceMiddleware";
 import { logAudit } from "./featureRouter";
 import { agentRuns, opportunities, proposals, contracts, files as filesTable, invoices } from "../drizzle/schema";
 
