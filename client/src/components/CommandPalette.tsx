@@ -75,7 +75,7 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
     if (intent.length < 3 || executeAgent.isPending) return;
     const parts = location.split("/").filter(Boolean);
     const relatedRecordType = parts[0] === "app" ? parts[1] : undefined;
-    const relatedRecordId = parts[2] && /^\\d+$/.test(parts[2]) ? Number(parts[2]) : undefined;
+    const relatedRecordId = parts[2] && /^\d+$/.test(parts[2]) ? Number(parts[2]) : undefined;
     const response = await executeAgent.mutateAsync({ intent, relatedRecordType, relatedRecordId });
     setAgentResult(response);
   };
@@ -126,7 +126,7 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
 
   const recordParts = location.split("/").filter(Boolean);
   const currentRecordType = recordParts[0] === "app" ? recordParts[1] : undefined;
-  const currentRecordId = recordParts[2] && /^\\d+$/.test(recordParts[2]) ? Number(recordParts[2]) : undefined;
+  const currentRecordId = recordParts[2] && /^\d+$/.test(recordParts[2]) ? Number(recordParts[2]) : undefined;
 
   const groupedCommands = useMemo(() => {
     const groups: Record<string, CommandItem[]> = { navigate: [], create: [], action: [] };
