@@ -28,7 +28,7 @@ interface CommandPaletteProps {
 export default function CommandPalette({ open, onClose, onOpenSearch }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [agentResult, setAgentResult] = useState<{
     agentRunId: number;
