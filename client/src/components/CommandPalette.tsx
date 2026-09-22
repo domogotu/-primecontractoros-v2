@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { trpc } from "@/lib/trpc";
 import { Input } from "@/components/ui/input";
 import {
   Search, Plus, FileText, Briefcase, FolderOpen, Users,
   Receipt, Settings, BarChart3, Shield, BookOpen, Zap,
-  Home, CheckSquare, ArrowRight, Command
+  Home, CheckSquare, ArrowRight, Command, Sparkles, Loader2, AlertTriangle
 } from "lucide-react";
 
 interface CommandItem {
@@ -29,6 +30,16 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [, navigate] = useLocation();
   const inputRef = useRef<HTMLInputElement>(null);
+  const [agentResult, setAgentResult] = useState<{
+    agentRunId: number;
+    agentType: string;
+    status: string;
+    modelUsed?: string | null;
+    result?: string | null;
+    auditLogId?: number | null;
+    error?: string;
+  } | null>(null);
+  const executeAgent = trpc.agent.execute.useMutation();
 
   const commands: CommandItem[] = useMemo(() => [
     // Navigation
@@ -57,6 +68,14 @@ export default function CommandPalette({ open, onClose, onOpenSearch }: CommandP
     { id: "action-sam", label: "Search SAM.gov", description: "Find opportunities on SAM.gov", icon: <Search className="h-4 w-4 text-blue-500" />, action: () => { navigate("/app/sam-search"); onClose(); }, category: "action", keywords: ["government", "federal"] },
     { id: "action-help", label: "Open Help", description: "View documentation and guides", icon: <BookOpen className="h-4 w-4 text-gray-500" />, action: () => { navigate("/help"); onClose(); }, category: "action", keywords: ["docs", "guide", "support"] },
   ], [navigate, onClose, onOpenSearch]);
+
+  const handleRunIntent = async () => {
+    const intent = query.trim();
+    if (intent.length < 3 || executeAgent.isPending) return;
+    const relatedRecordType = location.startsWith("/app/") ? location.split("/")[2] : undefined;
+    const response = await executeAgent.mutateAsync({ intent, relatedRecordType });
+    setAgentResult(response);
+  };
 
   const filteredCommands = useMemo(() => {
     if (!query.trim()) return commands;
