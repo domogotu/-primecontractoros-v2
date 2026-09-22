@@ -11,6 +11,10 @@ export default function AgentActivityPanel({ relatedRecordType, relatedRecordId,
   const runs = trpc.agent.list.useQuery({ relatedRecordType, relatedRecordId, limit: compact ? 5 : 20 });
   const approve = trpc.agent.approveAction.useMutation({ onSuccess: () => runs.refetch() });
   const reject = trpc.agent.rejectAction.useMutation({ onSuccess: () => runs.refetch() });
+  const preview = trpc.agent.executionPreview.useMutation({ onSuccess: () => runs.refetch() });
+  const authorize = trpc.agent.authorizeExecution.useMutation({ onSuccess: () => runs.refetch() });
+  const execute = trpc.agent.executeAuthorized.useMutation({ onSuccess: () => runs.refetch() });
+  const verify = trpc.agent.verifyExecution.useMutation({ onSuccess: () => runs.refetch() });
 
   return (
     <section className={compact ? "border-t px-4 py-3" : "rounded-lg border p-4"}>
@@ -63,7 +67,36 @@ export default function AgentActivityPanel({ relatedRecordType, relatedRecordId,
                         </button>
                       </div>
                     )}
-                    {run.approvalStatus === "approved" && <p className="text-[11px] mt-2 text-muted-foreground">Approved for a future execution step. Nothing was executed by this approval.</p>}
+                    {run.approvalStatus === "approved" && run.executionStatus === "not_started" && (
+                      <div className="mt-2">
+                        <p className="text-[11px] text-muted-foreground">Approved. Generate an execution preview before any execution authorization.</p>
+                        <button className="mt-2 rounded-md border px-2 py-1 text-[11px]" onClick={() => preview.mutate({ agentRunId: run.id })} disabled={preview.isPending}>Execution preview</button>
+                      </div>
+                    )}
+                    {run.executionStatus === "preview_ready" && (
+                      <div className="mt-2 rounded border p-2">
+                        <p className="text-[11px] font-semibold">Execution preview ready</p>
+                        <p className="text-[10px] text-muted-foreground mt-1">Nothing has executed. Explicit authorization is required.</p>
+                        <button className="mt-2 rounded-md border px-2 py-1 text-[11px]" onClick={() => authorize.mutate({ agentRunId: run.id })} disabled={authorize.isPending}>Authorize execution</button>
+                      </div>
+                    )}
+                    {run.executionStatus === "authorized" && (
+                      <div className="mt-2">
+                        <p className="text-[11px] text-muted-foreground">Execution explicitly authorized. The execution adapter must still be available.</p>
+                        <button className="mt-2 rounded-md border px-2 py-1 text-[11px]" onClick={() => execute.mutate({ agentRunId: run.id })} disabled={execute.isPending}>Execute authorized action</button>
+                      </div>
+                    )}
+                    {run.executionStatus === "executing" && (
+                      <div className="mt-2">
+                        <p className="text-[11px] text-muted-foreground">Execution step reached. Verify the result before marking it complete.</p>
+                        <div className="flex gap-2 mt-2">
+                          <button className="rounded-md border px-2 py-1 text-[11px]" onClick={() => verify.mutate({ agentRunId: run.id, verified: true, result: "Verified by authorized user." })} disabled={verify.isPending}>Verify result</button>
+                          <button className="rounded-md border px-2 py-1 text-[11px]" onClick={() => verify.mutate({ agentRunId: run.id, verified: false, result: "Execution result could not be verified." })} disabled={verify.isPending}>Mark failed</button>
+                        </div>
+                      </div>
+                    )}
+                    {run.executionStatus === "verified" && <p className="text-[11px] mt-2 text-muted-foreground">Execution verified and audited.</p>}
+                    {run.executionStatus === "failed" && <p className="text-[11px] mt-2 text-destructive">Execution failed or could not be verified.</p>}
                     {run.approvalStatus === "rejected" && <p className="text-[11px] mt-2 text-muted-foreground">Proposal rejected. Nothing was executed.</p>}
                   </div>
                 )}
