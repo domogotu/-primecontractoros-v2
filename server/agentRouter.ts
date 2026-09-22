@@ -134,13 +134,29 @@ export const agentRouter = router({
     if (run.approvalStatus !== "approved" || run.executionStatus !== "authorized") {
       throw new TRPCError({ code: "FORBIDDEN", message: "Execution is not explicitly authorized." });
     }
-    // Deliberately no external side effect exists in this layer yet.
-    await db.update(agentRuns).set({ executionStatus: "executing" })
-      .where(and(eq(agentRuns.id, input.agentRunId), eq(agentRuns.workspaceId, workspaceId)));
+    const action = run.proposedAction ? JSON.parse(run.proposedAction) : null;
+    const supportedExecutionTypes = new Set(["create_task", "create_alert", "create_compliance_item", "create_deliverable"]);
+    if (!action || !supportedExecutionTypes.has(String(action.actionType))) {
+      await db.update(agentRuns).set({
+        executionStatus: "failed",
+        executionError: "No execution adapter is registered for this action type. No external action was executed.",
+      }).where(and(eq(agentRuns.id, input.agentRunId), eq(agentRuns.workspaceId, workspaceId)));
+      await logAudit(workspaceId, ctx.user.id, "update", "agentRun", input.agentRunId, {
+        executionStatus: "failed", execution: "NO_ADAPTER", actionType: action?.actionType ?? null,
+      });
+      return { success: false, executionStarted: false, executionStatus: "failed" as const, message: "No execution adapter is registered for this action type. No external action was executed." };
+    }
+
+    // The allowlisted adapter types are intentionally gated here until their
+    // domain-specific mutation implementations are registered and verified.
+    await db.update(agentRuns).set({
+      executionStatus: "failed",
+      executionError: "Execution adapter registration is pending. No external action was executed.",
+    }).where(and(eq(agentRuns.id, input.agentRunId), eq(agentRuns.workspaceId, workspaceId)));
     await logAudit(workspaceId, ctx.user.id, "update", "agentRun", input.agentRunId, {
-      executionStatus: "executing", execution: "NO_SIDE_EFFECTOR_REGISTERED",
+      executionStatus: "failed", execution: "ADAPTER_PENDING", actionType: action.actionType,
     });
-    return { success: false, executionStarted: false, executionStatus: "executing" as const, message: "Execution adapter is not registered. No external action was executed." };
+    return { success: false, executionStarted: false, executionStatus: "failed" as const, message: "Execution adapter registration is pending. No external action was executed." };
   }),
 
   verifyExecution: protectedProcedure.input(z.object({
