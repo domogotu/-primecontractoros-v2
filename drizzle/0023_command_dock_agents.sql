@@ -1,0 +1,22 @@
+CREATE TABLE `agent_runs` (
+  `id` int AUTO_INCREMENT NOT NULL,
+  `workspaceId` int NOT NULL,
+  `platformOwnerOnly` boolean NOT NULL DEFAULT false,
+  `relatedRecordType` varchar(64),
+  `relatedRecordId` int,
+  `agentType` varchar(100) NOT NULL,
+  `status` enum('queued','processing','completed','failed','blocked') NOT NULL DEFAULT 'queued',
+  `priority` enum('low','medium','high','critical') NOT NULL DEFAULT 'medium',
+  `sourceTrigger` varchar(100) NOT NULL DEFAULT 'command_dock',
+  `createdBy` int NOT NULL,
+  `assignedTo` int,
+  `intent` text NOT NULL,
+  `result` text,
+  `modelUsed` varchar(150),
+  `errorMessage` text,
+  `auditLogId` int,
+  `createdAt` timestamp NOT NULL DEFAULT (now()),
+  `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+  `completedAt` timestamp,
+  CONSTRAINT `agent_runs_id` PRIMARY KEY(`id`)
+);
