@@ -61,3 +61,26 @@ The existing Cmd/Ctrl+K Command Palette now includes an agent intent lane. Enter
 ## Current limitation
 
 The code is wired for local Ollama, but actual execution requires a running Ollama service with the configured model available on the server host. No model is bundled with PrimeContractorOS.
+
+
+## Next layer: record context + Agent Activity/Handoff
+
+Agent runs now carry the workspace-scoped record context used to answer an intent. Supported context loaders currently include opportunity, proposal, contract, file, and invoice records. Unknown record types are explicitly marked as context-unadapted rather than filled with invented facts.
+
+The Command Dock derives the current `/app/<recordType>/<id>` context when available and passes it into the agent run. The Agent Activity/Handoff panel can filter activity to that same record.
+
+## Approved-action gate
+
+A model may return a structured `proposedAction` with:
+- actionType
+- title
+- description
+- parameters
+- requiresApproval=true
+
+The proposal is stored with `approvalStatus=pending`. Users can approve or reject the proposal from Agent Activity/Handoff.
+
+**Approval does not execute the action.** The approval endpoint only records the human decision and audit event. A later implementation must provide a separate, explicit execution path with its own authorization, validation, and audit controls.
+
+This preserves the review-first architecture:
+`intent -> context -> agent -> Ollama -> result -> proposed action -> human approval -> separate execution`.
