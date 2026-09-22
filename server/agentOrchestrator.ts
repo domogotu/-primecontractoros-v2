@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { getDb } from "./db";
 import { logAudit } from "./featureRouter";
 import { agentRuns, opportunities, proposals, contracts, files as filesTable, invoices } from "../drizzle/schema";
@@ -206,7 +206,7 @@ export async function listAgentRuns(workspaceId: number, relatedRecordType?: str
   if (!db) return [];
   const rows = await db.select().from(agentRuns)
     .where(eq(agentRuns.workspaceId, workspaceId))
-    .orderBy(agentRuns.createdAt)
+    .orderBy(desc(agentRuns.createdAt))
     .limit(limit);
   return rows
     .filter(row => !relatedRecordType || row.relatedRecordType === relatedRecordType)
