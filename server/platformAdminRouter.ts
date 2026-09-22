@@ -1618,7 +1618,7 @@ export const platformAdminRouter = router({
         title: z.string(),
         description: z.string().optional(),
         priority: z.enum(["low", "medium", "high", "urgent"]),
-        dueDate: z.string(),
+        dueDate: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const db = await getDb();
@@ -1627,7 +1627,7 @@ export const platformAdminRouter = router({
           title: input.title,
           description: input.description,
           priority: input.priority,
-          dueDate: new Date(input.dueDate),
+          dueDate: input.dueDate ? new Date(input.dueDate) : null,
           status: "open",
           createdBy: ctx.user.id,
           createdAt: new Date(),
