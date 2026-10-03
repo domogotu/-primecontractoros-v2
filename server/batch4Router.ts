@@ -82,12 +82,49 @@ export const customerAdoptionRouter = router({
   }),
 });
 
+function sanitizeBusinessProfileBankingInfo(value?: string | null): string {
+  if (!value) return "{}";
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const digits = (input: unknown) =>
+      typeof input === "string" ? input.replace(/\D/g, "") : "";
+    const routingDigits = digits(parsed.routingLastFour ?? parsed.routingNumber);
+    const accountDigits = digits(parsed.accountLastFour ?? parsed.accountNumber);
+    return JSON.stringify({
+      bankName: typeof parsed.bankName === "string" ? parsed.bankName : "",
+      routingLastFour: routingDigits.slice(-4),
+      accountLastFour: accountDigits.slice(-4),
+      accountType:
+        parsed.accountType === "Checking" || parsed.accountType === "Savings"
+          ? parsed.accountType
+          : "",
+    });
+  } catch {
+    return "{}";
+  }
+}
+
 export const businessProfileRouter = router({
   get: protectedProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const wsId = await requireWorkspaceId(ctx.user.id);
     const rows = await db.select().from(businessProfiles).where(eq(businessProfiles.workspaceId, wsId));
-    return rows[0] || null;
+    const profile = rows[0];
+    if (!profile) return null;
+
+    const safeBankingInfo = sanitizeBusinessProfileBankingInfo(profile.bankingInfo);
+    if (safeBankingInfo !== (profile.bankingInfo || "{}")) {
+      await db
+        .update(businessProfiles)
+        .set({ bankingInfo: safeBankingInfo })
+        .where(eq(businessProfiles.workspaceId, wsId));
+      try {
+        await logAudit(wsId, ctx.user.id, "update", "businessProfile", profile.id, {
+          action: "legacy_banking_identifiers_redacted",
+        });
+      } catch {}
+    }
+    return { ...profile, bankingInfo: safeBankingInfo };
   }),
   upsert: protectedProcedure.input(z.object({
     legalName: z.string().optional(),
@@ -139,7 +176,11 @@ export const businessProfileRouter = router({
     const fields = [input.legalName, input.email, input.phone, input.address, input.uei, input.cage, input.naicsPrimary || input.naicsCodes, input.certifications || input.socioeconomicCerts, input.capabilities, input.contractingModel, input.defaultContactName, input.defaultContactEmail];
     const filled = fields.filter(f => f && f.length > 0).length;
     const score = Math.round((filled / fields.length) * 100);
-    const data: any = { ...input, profileCompletenessScore: score };
+    const data: any = {
+      ...input,
+      bankingInfo: sanitizeBusinessProfileBankingInfo(input.bankingInfo),
+      profileCompletenessScore: score,
+    };
     // Convert date strings to Date objects
     if (input.samExpirationDate) data.samExpirationDate = new Date(input.samExpirationDate);
     else delete data.samExpirationDate;

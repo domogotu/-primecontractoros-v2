@@ -11,7 +11,7 @@ const sslRequested = ["true", "1", "require"].includes(
 );
 
 export default defineConfig({
-  schema: "./drizzle/schema.ts",
+  schema: ["./drizzle/schema.ts", "./drizzle/samRegistrationSchema.ts"],
   out: "./drizzle",
   dialect: "mysql",
   dbCredentials: sslRequested
