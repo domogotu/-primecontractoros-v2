@@ -139,7 +139,7 @@ export default function PlatformTasks() {
                 title: formData.title,
                 description: formData.description,
                 priority: formData.priority as "low" | "medium" | "high" | "urgent",
-                dueDate: formData.dueDate || undefined,
+                dueDate: formData.dueDate || "",
               })}
                 disabled={createMutation.isPending || !formData.title}
                 className="bg-green-900 text-white hover:bg-green-800"
