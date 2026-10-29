@@ -27,6 +27,7 @@ const mockDb = {
 
 vi.mock("./db", () => ({
   getDb: vi.fn(() => mockDb),
+  getInsertId: vi.fn(() => 1),
   createOpportunity: vi.fn().mockResolvedValue(1),
   getOpportunity: vi.fn().mockResolvedValue({ id: 1, title: "Test Opp", workspaceId: 1, status: "new" }),
   listOpportunities: vi.fn().mockResolvedValue([
